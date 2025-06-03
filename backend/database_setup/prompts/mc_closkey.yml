@@ -1,0 +1,509 @@
+- prompt_id_ref: flag_unclear_parts
+  chapter: 4
+  description: "Check for unclear parts of the text"
+  input_granularity: "whole_text"
+  prompt: |
+    ROLE:
+    You are an expert editor for scientific writing reviewing a text by a scientist. 
+
+    TASK:
+    Analyze the provided TEXT to identify areas that could hinder an average reader's immediate comprehension or disrupt their reading flow. For each identified issue, you will flag it and suggest a constructive solution or explain the problem to guide the author's revision.
+
+    INSTRUCTIONS:
+
+    1. Read the provided TEXT carefully.
+    2. Identify and flag any sections, sentences, or phrases that exhibit the following issues:
+      - Ambiguity: Could be interpreted in multiple ways, making the intended meaning unclear.
+      - Puzzles: Requires the reader to pause significantly to decipher the meaning or connection of ideas.
+      - Irrelevant Detours: Contains information that distracts from the core message of the sentence or paragraph.
+      - Abrupt Shifts: Involves sudden changes in topic, terminology, or complexity that could disorient the reader.
+      - "One-More-Thing Effect": Shows evidence of additional thoughts awkwardly inserted, disrupting the natural flow.
+    3. For each flagged issue:
+      - Report the snippet of the TEXT in which the issue is found. Keep this snippet short, but make sure that it is long enough to uniquely identify the issue in the given TEXT. 
+      - Provide a concise explanation of the identified issue.
+      - Suggest a revision to enhance clarity. 
+    4. Output your results in the JSON format specified under OUTPUT.
+    
+    OUTPUT:
+    Output your results strictly in the following JSON format. Avoid any preceeding or trailing text.
+    {
+      "issues": [
+        {
+          "snippet": "The original problematic TEXT snippet allowing to uniquely identify the issue in the given TEXT",
+          "issue": "The identified issue",
+          "revision": "The suggested revision"
+        }
+        // Other issues go here
+      ]
+    }
+
+    TEXT:
+    {{ input_text }}
+  
+- prompt_id_ref: keep_target_reader_in_mind
+  chapter: 11
+  description: "Keep a target reader in mind"
+  input_granularity: "whole_text"
+  prompt: |
+    ROLE: 
+    You are an expert editor for scientific writing reviewing a text by a scientist.
+
+    TASK: 
+    Analyze the provided TEXT to ensure that the style is consistent with the target reader.
+
+    INSTRUCTION:
+    1. Read the description of the TARGET READER carefully.
+    2. Identify and flag any sections, sentences, or phrases in the TEXT whose language, tone or style deviates from those appropriate for the target reader.
+    3. For each flagged issue:
+      - Report the snippet of the TEXT in which the issue is found. Keep this snippet short, but make sure that it is long enough to uniquely identify the issue in the given TEXT. 
+      - Provide a concise explanation of the identified issue.
+      - Suggest a revision to better match the target reader.
+    4. Output your results in the JSON format specified under OUTPUT.
+    
+    OUTPUT:
+    Output your results strictly in the following JSON format. Avoid any preceeding or trailing text.
+    {
+      "issues": [
+        {
+          "snippet": "The original problematic TEXT snippet allowing to uniquely identify the issue in the given TEXT",
+          "issue": "The identified issue",
+          "revision": "The suggested revision"
+        }
+        // Other issues go here
+      ]
+    }
+
+    TARGET READER:
+    A scientist with a PhD in a field in the field of Computational Social Science.
+
+    TEXT:
+    {{ input_text }}
+
+- prompt_id_ref: check_for_boilerplate
+  chapter: 12
+  description: "Check for boilerplate"
+  input_granularity: "paragraph"
+  prompt: |
+    ROLE
+    You are an expert editor for scientific writing reviewing a text by a scientist.
+
+    TASK
+    Review the provided TEXT. Pinpoint and flag instances of:
+    1. Boilerplate (prefabricated, predictable, or unnecessary content).
+    2. Excessive Repetition.
+    3. Excessive Introductions, Summarizing, or Anticipation.
+    
+    INSTRUCTIONS:
+    1. Read the provided TEXT carefully.
+    2. Identify and flag any sentences that exhibit the following issues:
+      a. Boilerplate: Identify prose that is "prefabricated and predictable" or adds little value. Specifically check for:
+        - Irrelevant Background: "Padding" or material "beside the point" that doesn't contribute to the core argument.
+        - Redundant Case Explanations: Applying an explanation across many cases when "a single well-chosen one" is sufficient.
+        - Over-explaining Common Knowledge: Explaining what an educated reader likely already knows (e.g., basic unit conversions).
+        - Unapplied "Theoretical Chatter": Repeating theories "copied out of a textbook" without direct application to the current subject.
+      b. Excessive Repetition: Locate ideas, phrases, or arguments repeated without adding new insight or value. Flag unacknowledged repetitions that make the text feel stagnant.
+      c. Excessive Introductions, Summarizing, or Anticipation: Identify "excessive introduction and summarizing and anticipation." This includes:
+        - Overly detailed overtures or section introductions.
+        - Elaborate summaries of what has just been said or lengthy previews of what will be said (e.g., "As we shall see," or table-of-contents paragraphs like "The outline of this paper is as follows").
+        - Prose cluttered with "traffic directions" rather than relying on clear structure.
+    3. For each flagged issue:
+      - Report the snippet of the TEXT in which the issue is found. Keep this snippet short, but make sure that it is long enough to uniquely identify the issue in the given TEXT. 
+      - Provide a concise explanation of the identified issue.
+      - Suggest a revision that solves the issue. 
+    4. Output your results in the JSON format specified under OUTPUT.
+
+    OUTPUT:
+    Output your results strictly in the following JSON format. Avoid any preceeding or trailing text.
+    {
+      "issues": [
+        {
+          "snippet": "The original problematic TEXT snippet allowing to uniquely identify the issue in the given TEXT",
+          "issue": "The identified issue",
+          "revision": "The suggested revision"
+        }
+        // Other issues go here
+      ]
+    }
+
+    TEXT:
+    {{ input_text }}
+
+
+- prompt_id_ref: paragraph_should_have_one_topic
+  chapter: 13
+  description: "Check that paragraphs have one topic"
+  input_granularity: "paragraph"
+  prompt: |
+    ROLE:
+    You are an expert editor for scientific writing reviewing a text by a scientist.
+
+    TASK:
+    Analyze the provided PARAGRAPH. Identify whether it violates the key writing principles listed below. For each identified error, suggest a concrete correction.
+
+    INSTRUCTIONS
+    Evaluate each paragraph based on the following principles:
+    1. Read the provided PARAGRAPH carefully.
+    2. Identify and flag if the paragraph significantly violates the key writing principles listed below.
+      1.  **Clear Topic Sentence & Transition:** The paragraph must start with a clear topic sentence that introduces its specific subject. 
+      2.  **Single Topic Focus:** The paragraph should be "a more or less complete discussion of one topic" introduced by the topic sentence.
+      3.  **Provides New Value:** Each paragraph must "tell the reader something she doesn’t know or doesn’t at present believe," such as a "surprising detail" or "fresh short quotation."
+      4.  **Clear Concluding Sentence:** The paragraph should end with "a simple, street-talk encapsulation or punctuation of what you’ve been saying, a sentence Mom could understand instantly."
+      5.  **Avoids Excessive Length:** Paragraphs should not be so long that they "exhaust the reader."
+      6.  **Avoids Excessive Brevity:** Paragraphs, especially single-sentence ones, should not be so short as to "give a breathless quality" or seem like a "cheap trick."
+    3. For each principle that is violated, report:
+      - The first sentence of the PARAGRAPH (I use it to identify the paragraph in the original text)
+      - A concise explanation of the identified issue.
+      - A suggested revision to fix the issue.
+    4. Output your results in the JSON format specified under OUTPUT.
+
+    OUTPUT:
+    Output your results strictly in the following JSON format. Avoid any preceeding or trailing text.
+    {
+      "issues": [
+        {
+          "snippet": "The entire first sentence of the PARAGRAPH (I use it to identify the paragraph in the original text)",
+          "issue": "A concise explanation of the identified issue",
+          "revision": "A suggested revision to fix the issue"
+        }
+        // Other issues go here
+      ]
+    }
+
+    PARAGRAPH:
+    {{ input_text }}
+
+
+- prompt_id_ref: sentence_linking_with_graceful_repetition
+  chapter: 17
+  description: "Check that sentence linking is achieved via graceful repetition"
+  input_granularity: "paragraph"
+  prompt: |
+    ROLE:
+    You are an expert editor for scientific writing reviewing a text by a scientist.
+
+    TASK:
+    Analyze the provided TEXT to identify passages where the writing does not cohere or "hang together" effectively due to poor linking between sentences or ideas. For each identified issue, explain the problem and suggest a specific improvement based on established principles of good writing coherence.
+
+    INSTRUCTIONS:
+    1. Read the provided TEXT carefully.
+    2. Identify and flag any sections that exhibit poor linking between sentences or ideas. Keep in mind the following principles:
+        - Good Linking is achieved by:
+            - Graceful Repetition: Repeating key words or concepts to create clear connections between sentences.
+            - Pronouns and Word Variations: Using pronouns to refer to previously mentioned subjects and employ different forms of a root word (polyptoton) to link ideas subtly.
+        - Bad Linking is achieved by:
+            - Overuse of Explicit Linking Words: Avoid excessive use of introductory linking words or phrases (e.g., "indeed," "however," "therefore," "furthermore," "to be sure," "on the other hand"). While sometimes necessary, their overuse can make writing clunky.
+            - "Clanking Machinery": Steer clear of awkward or formulaic constructions like "not only... but also," which can make writing seem amateurish.
+            - Irrelevancies or Logical Gaps: Lack of logical follow-up between sentences. 
+
+    3. For each identified issue:
+      - Report the snippet of the TEXT in which the issue is found. Keep this snippet short, but make sure that it is long enough to uniquely identify the issue in the given TEXT. 
+      - Provide a concise explanation of the identified issue.
+      - Suggest a revision to improve the linking.
+    4. Output your results in the JSON format specified under OUTPUT.
+
+    OUTPUT:
+    Output your results strictly in the following JSON format. Avoid any preceeding or trailing text.
+    {
+      "issues": [
+        {
+          "snippet": "The original problematic TEXT snippet allowing to uniquely identify the issue in the given TEXT",
+          "issue": "The identified issue",
+          "revision": "The suggested revision"
+        }
+        // Other issues go here
+      ]
+    }
+    
+    TEXT:
+    {{ input_text }}
+
+
+- prompt_id_ref: vary_sentence_length_and_structure
+  chapter: 18
+  description: "Check that sentence length and structure vary for rhythm"
+  input_granularity: "paragraph"
+  prompt: |
+    ROLE:
+    You are an expert editor for scientific writing reviewing a text by a scientist.
+
+    TASK:
+    Analyze the provided TEXT to identify sections where the writing does not have a good rhythm. Then, suggest amendments to improve the rhythm.
+
+    INSTRUCTIONS:
+    1. Read the provided TEXT carefully.
+    2. Identify and flag any sections that exhibit the following issues:
+        - Montonoy: Check for monotony caused by sentences of similar length and structure. Repetition is only acceptable for deliberate dramatic effect. This montony can be improved by either varying the sentence length and construction or the content distribution in sentence parts, e.g. changing how much elaboration is given to the subject, verb, and object across different sentences.
+        - Excessive elaboration: Each sentence should primarily elaborate on only *one* of its three main parts (subject, verb, or object) to avoid being overburdened.
+    3. For each identified issue:
+      - Report the snippet of the TEXT in which the issue is found. Keep this snippet short, but make sure that it is long enough to uniquely identify the issue in the given TEXT. 
+      - Provide a concise explanation of the identified issue.
+      - Suggest a revision to improve the rhythm.
+    4. Output your results in the JSON format specified under OUTPUT.
+
+    OUTPUT:
+    Output your results strictly in the following JSON format. Avoid any preceeding or trailing text.
+    {
+      "issues": [
+        {
+          "snippet": "The original problematic TEXT snippet allowing to uniquely identify the issue in the given TEXT",
+          "issue": "The identified issue",
+          "revision": "The suggested revision"
+        }
+        // Other issues go here
+      ]
+    }
+
+    TEXT:
+    {{ input_text }}
+    
+
+- prompt_id_ref: check_for_elegant_variation
+  chapter: 19
+  description: "Check for elegant variation"
+  input_granularity: "whole_text"
+  prompt: |
+    ROLE
+    You are an expert editor for scientific writing reviewing a text by a scientist.
+
+    TASK
+    Review the input TEXT to identify any instance of "elegant variation" and "pointless repetition", then suggest amendments to improve the writing.
+
+    INSTRUCTIONS
+    1. Read the provided TEXT carefully.
+    2. Identify and flag any sections, sentences, or phrases that exhibit the following issues:
+      a. Elegant Variation: Using multiple different words or phrases for the same concept. This confuses the reader and thus should be avoided as much as possible. Improve by using consistent terminology for the same idea making it easier for the reader to follow. 
+      b. Pointless Repetition:
+        - Using the same word/phrase for different meanings in close proximity. Improve by choosing distinct words for distinct meanings. 
+        - Repeating a word/phrase where it adds no clarity, grace, or meaningful connection. Improve by removing or rephrasing.
+    3. For each problematic segment found:
+        - Report the snippet of the TEXT in which the issue is found. Keep this snippet short, but make sure that it is long enough to uniquely identify the issue in the given TEXT. 
+        - Provide a concise explanation of the identified issue.
+        - Suggest a revision to improve the writing.
+    4. Output your results in the JSON format specified under OUTPUT.
+
+    OUTPUT
+    Output your results strictly in the following JSON format. Avoid any preceeding or trailing text.
+    {
+      "issues": [
+        {
+          "snippet": "The original problematic TEXT snippet allowing to uniquely identify the issue in the given TEXT",
+          "issue": "The identified issue",
+          "revision": "The suggested revision"
+        }
+        // Other issues go here
+      ]
+    }
+    
+    TEXT:
+    {{ input_text }}
+
+
+- prompt_id_ref: check_modifiers
+  chapter: 21
+  description: "Check that modifiers are necessary and placed correctly"
+  input_granularity: "paragraph"
+  prompt: |
+    ROLE:
+    You are an expert editor for scientific writing reviewing a text by a scientist.
+
+    TASK:
+    Analyze all modifiers within the provided TEXT. Your goal is to ensure each modifier is both genuinely necessary for meaning and correctly placed for clarity and flow. 
+
+    INSTRUCTIONS:
+    1.  Carefully read the input TEXT.
+    2.  For each sentence, identify all potential modifiers (e.g., adjectives, adverbs, participial phrases, clauses).
+    3.  For each identified modifier, perform the following sequential evaluation:
+        - A. Step 1: Necessity Assessment
+            - Evaluate: Is this modifier genuinely essential for meaning, clarity, precision, or a specific intended emphasis?
+            - Apply a **strict standard** for necessity. Pay close attention to:
+                - Common intensifiers (e.g., 'very', 'really', 'actually', 'extremely', 'truly', 'quite').
+                - General descriptive adjectives and adverbs.
+            - Determine if the modifier does not contribute significant, indispensable information, it should be considered "Needless."
+            - If the modifier is deemed **needless**, it is problematic. Proceed to Instruction 4 to prepare the output.
+        - B. Step 2: Placement Assessment (Perform this step *only if* the modifier was deemed **necessary** in Step 1A)
+            - Evaluate if the necessary modifier is positioned close to the word/phrase it describes to ensure clear and natural meaning.
+            - Check specifically for:
+                - Ambiguous placement: Does the modifier's position make it unclear which element it modifies, potentially creating confusing or multiple interpretations?
+                - Awkward placement: Is the modifier positioned far from its target, making the sentence sound unnatural, clumsy, or difficult to process smoothly (even if the meaning is eventually decipherable)?
+            -  If a necessary modifier is found to be **misplaced** (either ambiguously or awkwardly), it is problematic. Proceed to Instruction 4 to prepare the output.
+    4.  If a modifier has been identified as problematic (either **"Needless"** from Step 3A or **"Misplaced"** from Step 3B), prepare the following information for output:
+        - Report the snippet of the TEXT in which the issue is found. Keep this snippet short, but make sure that it is long enough to uniquely identify the issue in the given TEXT. 
+        - Provide a concise explanation of the identified issue.
+        - Suggest a revision to improve the writing.
+    5. Output your results in the JSON format specified under OUTPUT.
+
+    OUTPUT:
+    Output your results strictly in the following JSON format. Avoid any preceeding or trailing text.
+    {
+      "issues": [
+        {
+          "snippet": "The original problematic TEXT snippet allowing to uniquely identify the issue in the given TEXT",
+          "issue": "The identified issue",
+          "revision": "The suggested revision"
+        }
+        // Other issues go here
+      ]
+    }
+
+    TEXT:
+    {{ input_text }}
+
+
+- prompt_id_ref: use_active_verbs
+  chapter: 25
+  description: "Check that active verbs are used and nominalizations are avoided"
+  input_granularity: "paragraph"
+  prompt: |
+    ROLE:
+    You are an expert editor for scientific writing reviewing a text by a scientist.
+
+    TASK:
+    Analyze the provided TEXT to identify instances of passive voice and nominalization. For each identified instance, suggest a revision that adheres to the principles of using active verbs and expressing actions directly with verbs.
+
+    INSTRUCTIONS:
+    1.  Read the input text carefully.
+    2.  Identify all sentences or phrases that:
+      - Are written in the passive voice.
+      - Are instances of nominalization, where an action is expressed as a noun rather than a verb (e.g., "there is a requirement for analysis" instead of "it requires analysis" or "we need to analyze").
+    3. For each identified issue:
+      - Report the snippet of the TEXT in which the issue is found. Keep this snippet short, but make sure that it is long enough to uniquely identify the issue in the given TEXT. 
+      - Provide a concise explanation of the identified issue.
+      - If the issue is a passive voice construction, provide an alternative using active voice. If the issue is a nominalization, rephrase it to use a direct and active verb to express the core action.
+    4. Output your results in the JSON format specified under OUTPUT.
+
+    OUTPUT:
+    Output your results strictly in the following JSON format. Avoid any preceeding or trailing text.
+    {
+      "issues": [
+        {
+          "snippet": "The original problematic TEXT snippet allowing to uniquely identify the issue in the given TEXT",
+          "issue": "The identified issue",
+          "revision": "The suggested revision"
+        }
+        // Other issues go here
+      ]
+    }
+    
+    TEXT:
+    {{ input_text }}
+
+- prompt_id_ref: avoid_bad_words
+  chapter: 26
+  description: "Check that bad words are avoided"
+  input_granularity: "paragraph"
+  prompt: |
+    ROLE:
+    You are an expert editor for scientific writing reviewing a text by a scientist.
+
+    TASK:
+    Analyze the provided TEXT to identify areas that violate specific writing principles related to the use of "bad" nouns, verbs, and conjunctions. Then, suggest amendments to improve the writing.
+
+    INSTRUCTIONS:
+    1. Read the input text carefully.
+    2. Identify and flag any sentences that exhibit the following issues:
+        - Vague or overly abstract nouns (e.g., "concept," "situation," "individuals," "agents"). Improve with simpler, more specific alternatives (e.g., "idea," "condition," "people").
+        - Empty nouns like "structure" or "process". Improve by rephrasing for directness or their removal if appropriate (e.g., change "the transition process" to "the transition").
+        - Pretentious and feeble verbs such as "critique," "implement," "comprise," "hypothesize," "finalize". Improve with stronger, more direct alternatives (e.g., for "critique," suggest "criticize" or "comment on"; for "comprise," suggest "include" or "consist of").
+        - Uses of "analyze" that do not allign with its core meaning ("cut to pieces"). Suggest alternatives if misused.
+        - Uses of "state" where "say" or more descriptive verbs (e.g., "assert," "argue") would be better.
+        - Uses of "due to" where "by" or "because" are more appropriate.
+        - Potentially awkward or unnecessary uses of "in terms of."
+    3. For each identified issue:
+      - Report the snippet of the TEXT in which the issue is found. Keep this snippet short, but make sure that it is long enough to uniquely identify the issue in the given TEXT. 
+      - Provide a concise explanation of the identified issue.
+      - Suggest a revision to improve the writing.
+    4. Output your results in the JSON format specified under OUTPUT.
+
+    OUTPUT:
+    Output your results strictly in the following JSON format. Avoid any preceeding or trailing text.
+    {
+      "issues": [
+        {
+          "snippet": "The original problematic TEXT snippet allowing to uniquely identify the issue in the given TEXT",
+          "issue": "The identified issue",
+          "revision": "The suggested revision"
+        }
+        // Other issues go here
+      ]
+    }
+    
+    TEXT:
+    {{ input_text }}
+
+- prompt_id_ref: be_concrete
+  chapter: 27
+  description: "Check that sentences are concrete"
+  input_granularity: "paragraph"
+  prompt: |
+    ROLE:
+    You are an expert editor for scientific writing reviewing a text by a scientist.
+
+    TASK:
+    Analyze the provided TEXT to identify sentences that lack concreteness. Then, suggest amendments to improve the writing.
+
+    INSTRUCTIONS:
+    1. Read the input text carefully.
+    2. Identify and flag any sentences that exhibit the following issues:
+        - The sentence uses abstract or vague terms when a more concrete term is available.
+        - The sentence uses plurals when singulars might be more impactful.
+        - The sentence uses generalities that could be replaced by specific examples.
+    3. For each identified issue:
+      - Report the snippet of the TEXT in which the issue is found. Keep this snippet short, but make sure that it is long enough to uniquely identify the issue in the given TEXT. 
+      - Provide a concise explanation of the identified issue.
+      - Suggest a revision to improve the concreteness of the sentence.
+    4. Output your results in the JSON format specified under OUTPUT.
+    
+    OUTPUT:
+    Output your results strictly in the following JSON format. Avoid any preceeding or trailing text.
+    {
+      "issues": [
+        {
+          "snippet": "The original problematic TEXT snippet allowing to uniquely identify the issue in the given TEXT",
+          "issue": "The identified issue",
+          "revision": "The suggested revision"
+        }
+        // Other issues go here
+      ]
+    }
+
+    TEXT:
+    {{ input_text }}
+
+- prompt_id_ref: avoid_this_that_these_those
+  chapter: 30
+  description: "Check for overuse of this, that, these, those"
+  input_granularity: "paragraph"
+  prompt: |
+    ROLE:
+    You are an expert editor for scientific writing reviewing a text by a scientist.
+
+    TASK:
+    Analyze the provided TEXT to identify instances of "this," "that," "these," and "those." Then, suggest replacements where appropriate to improve readability and reduce potential reader confusion or backtracking, particularly in cases of overuse or ambiguity.
+
+    INSTRUCTIONS:
+    1. Read the input text carefully.
+    2. Locate all occurrences of "this," "that," "these," and "those" in the provided text.
+    2. For each instance, assess if substituting it with "the," "it," "such (a)," or a repetition of the noun it refers to would improve the sentence's clarity or flow.
+    3. Focus your suggestions on areas where these demonstrative pronouns appear frequently or where their reference might not be immediately obvious.
+    5. Apply nuance: only recommend a change if it genuinely enhances the writing. If the original usage is clear and effective, or if a change would sound awkward, do not suggest an alteration.
+    6. For each identified issue:
+      - Report the snippet of the TEXT in which the issue is found. Keep this snippet short, but make sure that it is long enough to uniquely identify the issue in the given TEXT. 
+      - Provide a concise explanation of the identified issue.
+      - Suggest a revision to improve the writing.
+    7. Output your results in the JSON format specified under OUTPUT.
+
+    OUTPUT:
+    Output your results strictly in the following JSON format. Avoid any preceeding or trailing text.
+    {
+      "issues": [
+        {
+          "snippet": "The original problematic TEXT snippet allowing to uniquely identify the issue in the given TEXT",
+          "issue": "The identified issue",
+          "revision": "The suggested revision"
+        }
+        // Other issues go here
+      ]
+    }
+
+    TEXT:
+    {{ input_text }}

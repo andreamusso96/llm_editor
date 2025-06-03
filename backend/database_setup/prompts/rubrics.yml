@@ -1,0 +1,14 @@
+- rubric_id_ref: full_text_review
+  steps:
+    - prompt_id_ref: flag_unclear_parts
+    - prompt_id_ref: keep_target_reader_in_mind
+    - prompt_id_ref: check_for_boilerplate
+    - prompt_id_ref: paragraph_should_have_one_topic
+    - prompt_id_ref: sentence_linking_with_graceful_repetition
+    - prompt_id_ref: vary_sentence_length_and_structure
+    - prompt_id_ref: check_for_elegant_variation
+    - prompt_id_ref: check_modifiers
+    - prompt_id_ref: use_active_verbs
+    - prompt_id_ref: avoid_bad_words
+    - prompt_id_ref: be_concrete
+    - prompt_id_ref: avoid_this_that_these_those

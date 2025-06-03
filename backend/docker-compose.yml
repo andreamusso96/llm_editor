@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: editor_db_postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "${DB_PORT}:5432"
+    volumes:
+      - editor_db_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  editor_db_data:
