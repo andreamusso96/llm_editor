@@ -9,7 +9,6 @@
     Analyze the provided TEXT to identify grammatical errors in the provided paragraphs.
 
     INSTRUCTIONS:
-
     1. Read the provided TEXT carefully.
     2. Identify and flag any sections, sentences, or phrases that exhibit the following issues:
       - Grammar errors: Errors in the use of grammar, such as subject-verb agreement, verb tense, and word order.

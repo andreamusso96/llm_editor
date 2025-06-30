@@ -30,10 +30,6 @@ async def test_correction():
         correction_service.get_correction_results(correction_id=response.correction_id)
 
 
-
-    
-    # 
-
 if __name__ == "__main__":
     test_etl()
     asyncio.run(test_correction())
