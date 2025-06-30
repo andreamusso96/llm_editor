@@ -74,7 +74,7 @@
     }
 
     TARGET READER:
-    A scientist with a PhD in a field in the field of Computational Social Science.
+    A scientist with a PhD in the field of Computational Social Science.
 
     TEXT:
     {{ input_text }}

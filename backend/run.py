@@ -34,4 +34,4 @@ def test_correction():
     # 
 
 if __name__ == "__main__":
-    test_correction()
+    test_etl()

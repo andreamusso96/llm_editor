@@ -1,0 +1,87 @@
+- prompt_id: 1
+  prompt: |
+    # ROLE
+    You are an expert academic editor specializing in computational social science.
+
+    # TASK
+    Your task is to analyze the rhetorical and structural patterns of the provided paper introduction, focusing on HOW the argument is constructed. Do NOT summarize the scientific findings.
+
+    # INSTRUCTIONS
+    1.  First, segment the introduction into its constituent paragraphs.
+    2.  For each paragraph, perform the following analysis:
+        * **Identify Rhetorical Goals:** What is the primary purpose of this paragraph in the argument? Examples include: 'Broad Context Setting', 'Problem Funneling', 'Identifying Research Gap', 'Critiquing Prior Work', 'Stating Hypotheses', 'Contribution Statement', 'Methodological Outline', or 'Paper Roadmap', etc.
+        * **Identify Structural Patterns:** How is the paragraph constructed? Examples include: 'Topic Sentence and Supporting Evidence', 'Comparative Structure (X vs. Y)', 'Chronological Progression', 'Use of Questions to Frame a Problem', 'Integration of Statistics/Data', or 'Varying Sentence Length for Emphasis', etc.
+    3.  Return your analysis as a JSON list, where each object in the list represents one paragraph.
+
+    # OUTPUT
+    Provide the output as a single, valid JSON array. Each object in the array should correspond to one paragraph from the introduction and follow this exact format:
+
+    [
+      {
+        "rhetorical_goal": "A concise description of the paragraph's primary purpose in the argument.",
+        "structural_pattern": "A concise description of how the paragraph is constructed."
+      },
+      {
+        "rhetorical_goal": "...",
+        "structural_pattern": "..."
+      }
+    ]
+
+    # --- INTRODUCTION ---
+    {{introduction}}
+
+- prompt_id: 2
+  prompt: |
+    # ROLE
+    You are a meta-analyst and research methodologist specializing in academic writing conventions in computational social science.
+
+    # TASK
+    Your task is to synthesize the provided analyses of 10 individual paper introductions into a single, comprehensive "Master Template." This template should describe the archetypal rhetorical flow, common structural patterns, and stylistic tendencies observed across these introductions. Do NOT simply list all features; identify dominant patterns and significant variations.
+
+    # INPUT CONTEXT
+    You will be with the detailed its paragraph-by-paragraph rhetorical goals and structural patterns of several papers in computational social science.
+
+    # INSTRUCTIONS
+    1.  **Understand the Input:** Review all introductions to get a comprehensive overview.
+    2.  **Identify Typical Paragraph Count:** Determine the typical range (min and max) of paragraphs in these introductions.
+    3.  **Define Key Rhetorical Stages:** Group the paragraph-level rhetorical goals into broader "stages" that represent the typical argumentative flow of an introduction (e.g., "Establishing Context," "Identifying Problem/Gap," "Stating Contribution & Roadmap"). Aim for 3-5 major stages.
+    4.  **For Each Rhetorical Stage:**
+        * List the **dominant rhetorical goals** observed for that stage.
+        * Describe the **typical structural patterns** used within paragraphs that serve those goals.
+        * Note any **significant variations** or alternative approaches for achieving the goals of that stage.
+    5.  **Summarize General Stylistic Observations:** Note commonalities in tone, sentence structure, and typical paragraph length across the introductions.
+    6.  **Structure the Output:** Present your synthesized Master Template in the precise JSON format specified below.
+
+    # OUTPUT FORMAT
+    Provide your output as a single, valid JSON object adhering to the following schema:
+
+    {
+      "introduction_archetype_name": "Computational Social Science - Synthesized Introduction Template",
+      "typical_paragraph_count_range": "[min_paragraphs, max_paragraphs]",
+      "key_rhetorical_stages": [
+        {
+          "stage_order": 1, // e.g., 1 for the first general stage of an intro
+          "stage_name": "Descriptive name for this stage (e.g., 'Broad Context and Problem Framing')",
+          "dominant_rhetorical_goals": ["Array of the most common paragraph-level rhetorical goals observed for this stage, e.g., 'Broad Context Setting', 'Highlighting Topic Importance'"],
+          "typical_structural_patterns": ["Array of common paragraph-level structural patterns used in this stage, e.g., 'Funneling from general to specific', 'Use of statistics to establish scale/relevance'"],
+          "common_variations_or_notes": "Text description of significant variations, alternative patterns, or important considerations for executing this stage."
+        },
+        // ... (Repeat for each identified stage, typically 3-5 stages)
+        {
+          "stage_order": "N",
+          "stage_name": "...",
+          "dominant_rhetorical_goals": ["..."],
+          "typical_structural_patterns": ["..."],
+          "common_variations_or_notes": "..."
+        }
+      ],
+      "general_stylistic_observations": {
+        "common_tone": "Brief description (e.g., 'Objective and formal, with persuasive elements when stating contribution')",
+        "sentence_structure_notes": "General observations (e.g., 'Predominantly complex sentences; active voice preferred for stating contributions')",
+        "paragraph_length_notes": "General observations (e.g., 'Paragraphs typically range from X to Y sentences')"
+      }
+    }
+
+    # INPUT DATA (JSON Array of 10 Introduction Analyses)
+    {{json_analyses_of_10_introductions}}
+        

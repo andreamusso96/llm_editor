@@ -5,7 +5,7 @@ import time
 client = TestClient(app)
 
 def load_text():
-    text_path = '/Users/andrea/Desktop/PhD/llm_editor/text.txt'
+    text_path = '/Users/andrea/Desktop/PhD/llm_editor/frontend/public/text.txt'
     with open(text_path, 'r') as file:
         text = file.read()
     return text
@@ -44,4 +44,4 @@ def test_all():
 
 
 if __name__ == "__main__":
-    test_all()
+    test_create_correction()

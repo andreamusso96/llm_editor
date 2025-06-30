@@ -58,7 +58,6 @@ def process_correction_step_task(correction_step_id: int, llm_model_name: str):
                         segment_global_start_offset=step.original_text_start_char,
                         snippet=issue_item.snippet
                     )
-                    logger.debug(f"Located snippet at positions {start_char}:{end_char} for step {correction_step_id}")
 
                     analysis_result = AnalysisResult(
                         correction_step_id=step.correction_step_id,
