@@ -1,24 +1,89 @@
-- prompt_id_ref: flag_errors_in_paragraphs
-  description: "Check for mistakes in paragraphs"
-  input_granularity: "paragraph"
+- prompt_id_ref: copy_editor_corrections
+  description: "Check punctuation, grammar, and spelling errors."
+  input_granularity: paragraph
   prompt: |
-    ROLE:
-    You are an expert editor for scientific writing reviewing a text by a scientist. 
+    ## ROLE:
+    You are an expert copy editor for scientific writing, tasked with reviewing a PhD thesis in cryptography.
 
-    TASK:
-    Analyze the provided TEXT to identify grammatical errors in the provided paragraphs.
+    ## TASK:
+    Analyze the provided TEXT to identify and correct all objective errors. Your goal is to ensure the text is grammatically perfect and free of spelling and punctuation mistakes.
 
-    INSTRUCTIONS:
-    1. Read the provided TEXT carefully.
-    2. Identify and flag any sections, sentences, or phrases that exhibit the following issues:
-      - Grammar errors: Errors in the use of grammar, such as subject-verb agreement, verb tense, and word order.
-      - Spelling errors: Errors in the use of spelling, such as incorrect spelling of words.
-      - Punctuation errors: Errors in the use of punctuation, such as incorrect use of commas, periods, and other punctuation marks.
-    3. For each flagged issue:
-      - Report the snippet of the TEXT in which the issue is found. Keep this snippet as short as possible, just enough to identify the issue.
-      - Report the full sentence in which the snippet is found. This is important to understand the context of the issue.
-      - Provide a concise explanation of the identified issue.
-      - Suggest a revision to correct the issue.
+    ## INSTRUCTIONS:
+    1.  Carefully read the provided TEXT.
+    2.  Identify any sections, sentences, or phrases that exhibit the following issues:
+        * Grammar errors (e.g., subject-verb agreement, tense, word order).
+        * Spelling errors.
+        * Punctuation errors.
+    3.  For each identified issue, create a JSON object. The final output should be a single JSON object containing a list named "issues".
+    4.  Each object in the list must contain the following keys:
+        * `snippet`: The exact part of the TEXT with the issue. Keep it as short as possible.
+        * `sentence_context`: The full sentence containing the snippet.
+        * `issue`: A concise explanation of the error (e.g., "Spelling error", "Incorrect comma usage").
+        * `revision`: The corrected version of the snippet.
 
-    TEXT:
+    ## TEXT:
+    {{ input_text }}
+
+- prompt_id_ref: symbol_notation_consistency
+  description: "Ensure notation are used coherently."
+  input_granularity: whole_text
+  prompt: |
+    ## ROLE:
+    You are an expert reviewer of cryptographic research with meticulous attention to mathematical notation and symbol consistency.
+
+    ## TASK:
+    Analyze the provided TEXT to ensure all symbols and notations are used consistently, cross-referencing against the provided SYMBOL_GLOSSARY. You must identify any deviation or inconsistent usage.
+
+    ## INSTRUCTIONS:
+    1.  Review the SYMBOL_GLOSSARY to understand the defined meaning and LaTeX representation of each symbol.
+    2.  Carefully read the provided TEXT, paying close attention to every mathematical symbol and piece of notation.
+    3.  Identify any usage in the TEXT that contradicts the SYMBOL_GLOSSARY. This includes:
+        * Using the wrong symbol for a defined concept.
+        * Using a defined symbol for the wrong concept.
+        * Inconsistent formatting or representation of a symbol.
+    4.  For each identified issue, create a JSON object. The final output should be a single JSON object containing a list named "issues".
+    5.  Each object in the list must contain:
+        * `snippet`: The exact symbol or notation used incorrectly.
+        * `sentence_context`: The full sentence containing the inconsistent snippet.
+        * `issue`: A concise explanation of the inconsistency (e.g., "Symbol 'k' used, but glossary defines 'λ' as the security parameter.", "Notation for encryption function is inconsistent with definition.").
+        * `revision`: The corrected symbol or notation based on the glossary.
+
+    ## SYMBOL_GLOSSARY:
+    \begin{itemize}
+      \item[\$m\$]: The size, in bits, of the primary bit array used in structures like Bloom filters.
+      \item[\$k\$]: The number of independent hash functions used specifically in a Bloom Filter.
+      \item[\$p\$]: The precision parameter for a HyperLogLog (HLL) structure, which determines the number of registers and thus its accuracy.
+      \item[\$d\$]: The depth (number of rows) of a Count-Min Sketch matrix. This corresponds to the number of hash functions it uses.
+      \item[\$w\$]: The width (number of columns) of a Count-Min Sketch matrix.
+      \item[\$h_i(x)\$]: A generic representation for the \$i\$-th hash function applied to an element \$x\$.
+    \end{itemize}
+
+    ## TEXT:
+    {{ input_text }}
+
+- prompt_id_ref: clarity_flow_enhancement
+  description: "Improve phrasing for better readability."
+  input_granularity: paragraph
+  prompt: |
+    ## ROLE:
+    You are an expert academic editor specializing in enhancing the clarity and readability of complex technical writing in the field of cryptography.
+
+    ## TASK:
+    Revise the provided TEXT to improve its clarity, conciseness, and narrative flow without altering the core technical meaning. Your focus is on how the ideas are expressed, not on their correctness.
+
+    ## INSTRUCTIONS:
+    1.  Carefully read the provided TEXT.
+    2.  Identify and flag any sentences or phrases that are:
+        * Awkwardly phrased.
+        * Unnecessarily verbose or wordy.
+        * Hard to parse or syntactically complex.
+        * Ambiguous.
+    3.  For each identified issue, create a JSON object. The final output should be a single JSON object containing a list named "issues".
+    4.  Each object in the list must contain:
+        * `snippet`: The exact phrase or sentence that is poorly written.
+        * `sentence_context`: The full sentence containing the snippet (if the snippet is not the full sentence).
+        * `issue`: A concise explanation of the stylistic problem (e.g., "Awkward phrasing", "Redundant phrase", "Hard to parse due to multiple clauses").
+        * `revision`: A revised version of the sentence that is clearer and more direct.
+
+    ## TEXT:
     {{ input_text }}

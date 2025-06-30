@@ -32,4 +32,4 @@ async def test_correction():
 
 if __name__ == "__main__":
     test_etl()
-    asyncio.run(test_correction())
+    # asyncio.run(test_correction())
