@@ -1,8 +1,5 @@
-# src/schemas.py
-from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
-from .models import CorrectionStatusEnum # Assuming models.py is in the same directory or accessible
-
+from pydantic import BaseModel
+from typing import List, Optional
 
 class Prompt(BaseModel):
     prompt_id_ref: str

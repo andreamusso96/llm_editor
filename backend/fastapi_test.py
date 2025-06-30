@@ -44,4 +44,4 @@ def test_all():
 
 
 if __name__ == "__main__":
-    test_create_correction()
+    test_all()

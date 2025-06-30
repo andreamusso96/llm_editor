@@ -7,12 +7,10 @@ from config import PROJECT_DIR
 
 
 class ETLService:
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, prompt_files: List[str]):
         self.db = db
         self.prompt_dir = os.path.join(PROJECT_DIR, "database_setup/prompts/")
-        self.prompt_files = [
-            "mc_closkey.yml"
-        ]
+        self.prompt_files = prompt_files
 
     def _load_prompts_from_yaml(self) -> List[Dict[str, Any]]:
         for file in self.prompt_files:
@@ -33,4 +31,8 @@ class ETLService:
             )
             self.db.add(prompt_model)
         self.db.commit()
-    
+
+
+class ETLServiceMia(ETLService):
+    def __init__(self, db: Session):
+        super().__init__(db, prompt_files=["mia.yml"])

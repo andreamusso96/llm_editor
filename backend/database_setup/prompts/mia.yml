@@ -1,0 +1,25 @@
+- prompt_id_ref: flag_errors_in_paragraphs
+  description: "Check for mistakes in paragraphs"
+  input_granularity: "paragraph"
+  prompt: |
+    ROLE:
+    You are an expert editor for scientific writing reviewing a text by a scientist. 
+
+    TASK:
+    Analyze the provided TEXT to identify grammatical errors in the provided paragraphs.
+
+    INSTRUCTIONS:
+
+    1. Read the provided TEXT carefully.
+    2. Identify and flag any sections, sentences, or phrases that exhibit the following issues:
+      - Grammar errors: Errors in the use of grammar, such as subject-verb agreement, verb tense, and word order.
+      - Spelling errors: Errors in the use of spelling, such as incorrect spelling of words.
+      - Punctuation errors: Errors in the use of punctuation, such as incorrect use of commas, periods, and other punctuation marks.
+    3. For each flagged issue:
+      - Report the snippet of the TEXT in which the issue is found. Keep this snippet as short as possible, just enough to identify the issue.
+      - Report the full sentence in which the snippet is found. This is important to understand the context of the issue.
+      - Provide a concise explanation of the identified issue.
+      - Suggest a revision to correct the issue.
+
+    TEXT:
+    {{ input_text }}

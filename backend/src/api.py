@@ -5,15 +5,12 @@ from typing import List
 # Assuming your modules are structured like this
 from config import LLM_MODEL_NAME
 from src.utils import get_db, logger # Your DB session dependency and logger
-from src.correction import CorrectionService # Your service layer
-from src.llm_interaction import LLMInteraction
-from src.schemas import ( # Your Pydantic models
+from src.services.correction import CorrectionService # Your service layer
+from src.schemas.schemas_api import ( # Your Pydantic models
     CorrectionCreateRequest, CorrectionCreateResponse,
     CorrectionStatusResponse, CorrectionResultResponse, PromptList, Prompt
 )
 from src.models import Prompt as PromptModel
-
-LLM_MODEL_NAME = "gemini-1.5-flash"
 
 router = APIRouter(
     prefix="/api/v1", # Base prefix for this router
@@ -36,12 +33,13 @@ async def create_correction_submission(
     correction_service = CorrectionService(db=db, llm_model_name=LLM_MODEL_NAME)
     correction_create_response = correction_service.create_new_correction(
         original_text=request_data.text_content,
-        prompt_id_refs=request_data.prompt_id_refs,
-        background_tasks=background_tasks
+        prompt_id_refs=request_data.prompt_id_refs
     )
     if not correction_create_response:
         logger.error("Failed to create correction submission.")
         raise HTTPException(status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to initiate correction process.")
+    
+    background_tasks.add_task(correction_service.run_correction, correction_id=correction_create_response.correction_id)
     return correction_create_response
 
 

@@ -9,14 +9,13 @@ Base = declarative_base()
 
 # Define Enums for status fields to ensure data integrity
 class InputGranularityEnum(enum.Enum):
-    whole_text = "whole_text"
-    paragraph = "paragraph"
+    WHOLE_TEXT = "whole_text"
+    PARAGRAPH = "paragraph"
 
 class CorrectionStatusEnum(enum.Enum):
-    pending = "pending"
-    processing = "processing"
-    completed = "completed"
-    failed = "failed"
+    PENDING = "pending"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
 class Prompt(Base):
     __tablename__ = "prompts"
@@ -41,7 +40,7 @@ class Correction(Base):
 
     correction_id = Column(Integer, Identity(always=True), primary_key=True)
     original_text = Column(Text, nullable=False)
-    status = Column(SAEnum(CorrectionStatusEnum), default=CorrectionStatusEnum.pending, nullable=False)
+    status = Column(SAEnum(CorrectionStatusEnum), default=CorrectionStatusEnum.PENDING, nullable=False)
 
     # Relationship: A Correction can have many CorrectionSteps
     steps = relationship("CorrectionStep", back_populates="correction", cascade="all, delete-orphan")
@@ -60,7 +59,7 @@ class CorrectionStep(Base):
     original_text_start_char = Column(Integer, nullable=False)
     paragraph_index = Column(Integer, nullable=True) # Null if prompt is 'whole_text'
     
-    status = Column(SAEnum(CorrectionStatusEnum), default=CorrectionStatusEnum.pending, nullable=False)
+    status = Column(SAEnum(CorrectionStatusEnum), default=CorrectionStatusEnum.PENDING, nullable=False)
     llm_response = Column(JSONB, nullable=True)
     error_message = Column(Text, nullable=True)
 

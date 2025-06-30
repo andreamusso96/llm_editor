@@ -1,5 +1,5 @@
 import re
-from typing import Optional, List, Tuple
+from typing import List, Tuple
 from src.utils import logger
 
 def split_text_into_paragraphs(text: str) -> List[Tuple[str, int]]:
@@ -52,47 +52,35 @@ def split_text_into_paragraphs(text: str) -> List[Tuple[str, int]]:
         start_offset = next_para_start_offset
 
     return paragraphs_with_offsets
+    
 
+def locate_snippet_in_segment(segment_text: str, segment_global_start_offset: int, snippet: str, sentence_context: str) -> Tuple[int, int]:
+    try: 
+        # TODO: If there the same sentence has twice an error with the same original snippet, this will not work.
+        # We will attribute both errors to the first occurence of the original snippet. This is a minor issue for now. But we should fix it.
+        full_sentence_context_start_pos = segment_text.find(sentence_context)
+        full_sentence_context_end_pos = full_sentence_context_start_pos + len(sentence_context)
 
-def locate_snippet_in_segment(segment_text: str, segment_global_start_offset: int, snippet: str) -> Tuple[int, int]:
-    """
-    Locates a snippet within a given text segment and returns its global
-    start and end character offsets relative to the original full document.
-
-    Args:
-        segment_text: The text segment (e.g., a paragraph or the full document)
-                      in which the snippet is expected to be found.
-        segment_global_start_offset: The starting character offset of 'segment_text'
-                                     within the overall original document. (This is 0
-                                     if segment_text is the full original document).
-        snippet: The snippet string to locate.
-
-    Returns:
-        A tuple (global_start_char, global_end_char). Returns (-1, -1) if not found.
-    """
-    if not snippet:
-        logger.warning("Attempted to locate an empty snippet.")
-        return -1, -1
-
-    try:
-        local_start_char = segment_text.find(snippet)
-
-        if local_start_char != -1:
-            global_start_char = segment_global_start_offset + local_start_char
-            global_end_char = global_start_char + len(snippet)
-            
-            # Optional: A quick sanity check if you have access to the original_full_text here
-            # This function's philosophy is that it trusts segment_text and its offset.
-            # The caller (task) can do a final sanity check against original_full_text if desired.
-            logger.debug(f"Snippet '{snippet[:30]}...' located at local:{local_start_char}, global:[{global_start_char}:{global_end_char}]")
-            return global_start_char, global_end_char
+        if full_sentence_context_start_pos == -1:
+            snippet_start_pos = segment_text.find(snippet)
+            snippet_end_pos = snippet_start_pos + len(snippet)
         else:
-            logger.warning(f"Snippet '{snippet[:100]}...' not found in the provided segment_text (length {len(segment_text)}). Segment starts with: '{segment_text[:100]}...'")
+            full_sentence_context = segment_text[full_sentence_context_start_pos:full_sentence_context_end_pos]
+            snippet_start_pos = full_sentence_context_start_pos + full_sentence_context.find(snippet)
+            snippet_end_pos = snippet_start_pos + len(snippet)
+        
+        if snippet_start_pos == -1:
+            logger.warning(f"Original snippet not found in user submission: {sentence_context}")
             return -1, -1
-    except Exception as e:
-        logger.exception(f"Error during snippet location in segment: {e}")
-        return -1, -1
+        
+        global_snippet_start_pos = segment_global_start_offset + snippet_start_pos
+        global_snippet_end_pos = segment_global_start_offset + snippet_end_pos
 
+        return global_snippet_start_pos, global_snippet_end_pos
+
+    except ValueError:
+        logger.warning(f"Snippet {snippet} not found in segment: {segment_text}")
+        return -1, -1
 
 if __name__ == "__main__":
     text = """
