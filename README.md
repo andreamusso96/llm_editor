@@ -1,18 +1,6 @@
 # LLM Editor
 
-A web-based text correction tool that uses LLM prompts to identify and fix issues in text documents. The application consists of a React frontend and a FastAPI backend that processes text through configurable prompts.
-
-## Features
-
-- **Text Correction**: Upload text and run various correction prompts
-- **Configurable Prompts**: Add custom prompts for different types of text analysis
-- **Multiple Granularities**: Process text by paragraph or as a whole document
-
-## Prerequisites
-
-- Python 3.8+
-- Node.js 18+
-- npm or yarn
+A web-based text correction tool that uses LLM prompts to identify and fix issues in text documents. 
 
 ## Installation
 
