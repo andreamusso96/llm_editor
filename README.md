@@ -6,7 +6,6 @@ A web-based text correction tool that uses LLM prompts to identify and fix issue
 
 - **Text Correction**: Upload text and run various correction prompts
 - **Configurable Prompts**: Add custom prompts for different types of text analysis
-- **Real-time Processing**: See corrections as they're processed
 - **Multiple Granularities**: Process text by paragraph or as a whole document
 
 ## Prerequisites
@@ -26,8 +25,8 @@ A web-based text correction tool that uses LLM prompts to identify and fix issue
 
 2. Create a virtual environment (recommended):
    ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   python -m venv .venv
+   source .venv/bin/activate  # On Windows: venv\Scripts\activate
    ```
 
 3. Install Python dependencies:
@@ -58,7 +57,7 @@ A web-based text correction tool that uses LLM prompts to identify and fix issue
 
 2. Activate your virtual environment (if using one):
    ```bash
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   source venv/bin/activate 
    ```
 
 3. Start the FastAPI server:
@@ -133,21 +132,24 @@ Your prompt must return a JSON response in this format:
 Here's an example of a grammar correction prompt:
 
 ```yaml
-- prompt_id_ref: grammar_check
-  description: "Check for grammar and punctuation errors"
-  input_granularity: paragraph
-  prompt: |
-    ## ROLE:
-    You are an expert copy editor.
+-   ## ROLE:
+    You are an expert copy editor for scientific writing, tasked with reviewing a PhD thesis in cryptography.
 
     ## TASK:
-    Identify and correct grammar, spelling, and punctuation errors in the provided text.
+    Analyze the provided TEXT to identify and correct all objective errors. Your goal is to ensure the text is grammatically perfect and free of spelling and punctuation mistakes.
 
     ## INSTRUCTIONS:
-    1. Read the provided TEXT carefully
-    2. Identify any grammar, spelling, or punctuation errors
-    3. Return a JSON object with an "issues" list
-    4. Each issue should contain: snippet, sentence_context, issue, and revision
+    1.  Carefully read the provided TEXT.
+    2.  Identify any sections, sentences, or phrases that exhibit the following issues:
+        * Grammar errors (e.g., subject-verb agreement, tense, word order).
+        * Spelling errors.
+        * Punctuation errors.
+    3.  For each identified issue, create a JSON object. The final output should be a single JSON object containing a list named "issues".
+    4.  Each object in the list must contain the following keys:
+        * `snippet`: The exact part of the TEXT with the issue. Keep it as short as possible.
+        * `sentence_context`: The full sentence containing the snippet.
+        * `issue`: A concise explanation of the error (e.g., "Spelling error", "Incorrect comma usage").
+        * `revision`: The corrected version of the snippet.
 
     ## TEXT:
     {{ input_text }}
@@ -172,20 +174,3 @@ llm_editor/
 │   └── package.json
 └── README.md
 ```
-
-## API Endpoints
-
-- `POST /api/correct`: Process text with selected prompts
-- `GET /api/prompts`: Get available prompts
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
-
-## License
-
-[Add your license information here]
