@@ -12,6 +12,7 @@ git clone https://github.com/andreamusso96/llm_editor.git
 3. Enter the repository
 ```
 cd llm_editor
+```
 4. Copy the .env.example file into a .env file
 ```
 cp .env.example .env
