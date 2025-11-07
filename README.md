@@ -21,7 +21,7 @@ cp .env.example .env
 ```
 GOOGLE_API_KEY=YOUR_API_KEY
 ```
-   All other environment variables you can leave as they are. 
+All other environment variables you can leave as they are. 
 
 6. Start up the containers using docker compose
 ```
