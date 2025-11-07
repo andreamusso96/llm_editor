@@ -29,7 +29,16 @@ async def test_correction():
         correction_service.get_correction_status(correction_id=response.correction_id)
         correction_service.get_correction_results(correction_id=response.correction_id)
 
+def load_prompts_to_db():
+    from src.etl.etl import ETLServiceMia
+    from src.utils import get_db_context, init_db, engine
+    from src.models import Base
+    Base.metadata.drop_all(bind=engine)
+    init_db()
+    with get_db_context() as db:
+        etl_service = ETLServiceMia(db)
+        etl_service.load_prompts_from_yaml_to_db()
 
 if __name__ == "__main__":
-    test_etl()
+    load_prompts_to_db()
     # asyncio.run(test_correction())

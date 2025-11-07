@@ -4,70 +4,25 @@ A web-based text correction tool that uses LLM prompts to identify and fix issue
 
 ## Installation
 
-### Backend Setup
+1. Install docker desktop https://www.docker.com/
+2. Clone the repository
+```
+git clone https://github.com/andreamusso96/llm_editor.git
+```
+3. Enter the repository
+```
+cd llm_editor
+4. Copy the .env.example file into a .env file
+```
+cp .env.example .env
+```
+5. Get a gemini api key https://aistudio.google.com/api-keys and paste in the `.env` file where it says `GOOGLE_API_KEY=YOUR_API_KEY` 
 
-1. Navigate to the backend directory:
-   ```bash
-   cd backend
-   ```
-
-2. Create a virtual environment (recommended):
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate 
-   ```
-
-3. Install Python dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-### Frontend Setup
-
-1. Navigate to the frontend directory:
-   ```bash
-   cd frontend
-   ```
-
-2. Install Node.js dependencies:
-   ```bash
-   npm install
-   ```
-
-## Running the Application
-
-### Start the Backend
-
-1. Navigate to the backend directory:
-   ```bash
-   cd backend
-   ```
-
-2. Activate your virtual environment (if using one):
-   ```bash
-   source venv/bin/activate 
-   ```
-
-3. Start the FastAPI server:
-   ```bash
-   uvicorn main:app --reload
-   ```
-
-The backend will be available at `http://localhost:8000`
-
-### Start the Frontend
-
-1. Navigate to the frontend directory:
-   ```bash
-   cd frontend
-   ```
-
-2. Start the development server:
-   ```bash
-   npm run dev
-   ```
-
-The frontend will be available at `http://localhost:5173`
+6. Start up the containers using docker compose
+```
+docker compose up --build
+```
+7. Paste this URL into your browser http://localhost:5173. You should see a frotend with "Writing Editor" as a title
 
 ## Usage
 
@@ -78,6 +33,7 @@ The frontend will be available at `http://localhost:5173`
 
 ## Adding Custom Prompts
 
+You can add you custom prompts. 
 To add new prompts, create YAML files in the `backend/database_setup/prompts/` directory following this structure:
 
 ```yaml

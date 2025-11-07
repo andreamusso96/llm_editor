@@ -3,7 +3,7 @@
   input_granularity: paragraph
   prompt: |
     ## ROLE:
-    You are an expert copy editor for scientific writing, tasked with reviewing a PhD thesis in cryptography.
+    You are an expert copy editor for scientific writing, tasked with reviewing a a paper in urban science (from a complexity/computational social science perspective).
 
     ## TASK:
     Analyze the provided TEXT to identify and correct all objective errors. Your goal is to ensure the text is grammatically perfect and free of spelling and punctuation mistakes.

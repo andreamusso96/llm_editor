@@ -1,0 +1,19 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN pip install -U pip setuptools wheel
+
+COPY backend/requirements.txt ./
+
+RUN pip install -r requirements.txt
+
+COPY backend/ .
+
+EXPOSE 8000
+
+RUN mkdir -p /var/lib/app
+COPY backend/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["sh","-c","exec uvicorn main:app --host 0.0.0.0 --port 8000 --reload"]

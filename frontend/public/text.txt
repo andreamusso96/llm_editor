@@ -1,9 +1,67 @@
-Probabilistic data structures represents a foundational component in modern large-scale systems, offering a compelling tradeoff between computational resources and perfect accuracy. Unlike their deterministic counterparts which require memory proportional to the number of items stored, probabilistic structures use a fixed or sub-linear amount of space, making them ideal for stream processing and big data applications. These structures work by accepting a small, tunable margin of error to achieve significant gains in memory usage and query time. The size of the structure, often denoted by a bit array of size $m$, is a key parameter that directly influences this trade-off.
+\section{Night usage}
+\subsection{High level night vs day differences..}
+\begin{figure}
+    \centering
+    \includegraphics[width=0.9\linewidth]{figures2/hour_duration_share.png}
+    \caption{Duration share by hour. }
+    \label{fig:hour_duration_share}
+\end{figure}
 
-A prime example is the Bloom Filter, used for approximate set membership testing. A Bloom filter is an array of $m$ bits, initially all set to 0, combined with $k$ independent hash functions. When an element is added, it is hashed $k$ times, and the bits at the resulting indices in the array are set to 1. To check if an element is in the set, it is hashed again, and if all corresponding bits are 1, it is considered a member. While it can produce false positives, it will never falsely report that an element is not present if it is, which is a powerful garuntee. The answer it provides back to the user is one that is definitive only when it is negative.
+Figure \ref{fig:hour_duration_share} shows the circadian rhythm in phone usage. We observe that phone usage peaks in the late evening around 22, and dips in the late night around 4-5. The peak in the middle of the day is lunch time. 
 
-For estimating the number of unique items in a dataset, or its cardinality, the HyperLogLog (HLL) algorithm is exceptionally efficient. An HLL works by hashing incoming elements and observing the pattern of leading zeros in the binary representation of the hash values. This allows it to estimate cardinalities of many billions, using only a tiny amount of memory a feat that is impossible with deterministic approaches. A crucial parameter is its precision, often denoted `p`, which determines the number of registers used; a higher number of registers $k$ leads to a more accurate estimate but requires more space.
+We split the day into two groups:
+\begin{enumerate}
+    \item \textbf{Day}: hours from 6am to 21pm
+    \item \textbf{Night}: hours between 21pm and 6am
+\end{enumerate}
 
-Another useful structure is the Count-Min Sketch, which estimates the frequency of events in a data stream. It uses a matrix with $d$ rows and $w$ columns, where each row has its own hash function. Unlike a Bloom Filter which uses a single hash function $h(x)$, Count-Min sketch uses $d$ different ones. When an element arrives, it is hashed $d$ times, and a corresponding counter in each row is incremented. The estimation of the frequency of an item is an operation that is accomplished by taking the minimum value of the counters to which the item maps across all the rows, which helps mitigate overcounting due to hash collisions.
+Night usage covers 30\% of total duration, and 23\% of total checks. 
+Night usage and day usage are qualitatively different modes of usage, as seen by user behavior. 
+Specifically, night usage is more immersive and focused. We observe this through two key metrics:
+\begin{enumerate}
+    \item Figure \ref{fig:hour_packages_per_bin} shows how the number of packages used in a given 15-minute bin changes by hour. 
+    During the day, users use a greater number of apps. 
+    \item Figure \ref{fig:hour_checks_per_minute} shows the number of app checks per minute of duration. For every minute a user spends on their phone, they do fewer checks during the night. 
+\end{enumerate}
 
-In conclusion, the power of these data structures are their ability to provide good-enough answers for many problems at a fraction of the cost. From detecting heavy hitters in network traffic with Count-Min Sketch to preventing one-hit wonders from cluttering a cache with Bloom filters, their applications are widespread. The clever trade-off between accuracy and memory, often governed by parameters like $p$ and $d$, are fundamental to their design. Their smart use is a hallmark of an engineer who is efficient.
+\begin{figure}
+    \centering
+    \includegraphics[width=0.8\linewidth]{figures2/hour_packages_per_bin.png}
+    \caption{Mean number of package used in a 15-minute time bin by hour. }
+    \label{fig:hour_packages_per_bin}
+\end{figure}
+
+\begin{figure}
+    \centering
+    \includegraphics[width=0.8\linewidth]{figures2/hour_checks_per_minute.png}
+    \caption{Number of checks for every minute of phone usage.}
+    \label{fig:hour_checks_per_minute}
+\end{figure}
+
+\subsection{App mix}
+These differences are related to changes in the app mix. 
+For each app we define a night-screen index, which measures how much an app is night oriented. 
+\subsubsection{Definition}
+How do we measure how much an app is night oriented?
+We assume that usage is a random variable $X$, so $P(X = i)$ is the probability of usage at hour $i$. 
+We then reorder hours linearly. We assume the day starts at 5am, and order hours from then on. 
+Our ordering functions $o$ maps an hour to an interger that represents it place in the order:
+\begin{equation}
+    o(i) = (i -6) \mod 25
+\end{equation}
+So, for example $o(6) = 0$ and $o(5) = -1 \mod 24 = 23$. 
+We then consider the cumulative density function of usage with this ordering of hours. 
+So, $f(x)$ is the probability of usage between 6am and hour $x$. Formally, if $o^{-1}$ is the inverse of $o$, then:
+\begin{equation}
+    f(x) = P(o^{-1}(0) \leq X \leq o^{-1}(x))
+\end{equation}
+The area under the curve of $f(x)$ is a measure of how skewed usage is towards the start point ($\arg \min o(x)$ = 6am). 
+The larger the area, the closer to 6am the bulk of the usage. The complement of this area (the area between the curve and 1) is a measure of how skewed usage is towards the endpoint ($\arg \max o(x)$ = 4am). The larger the area, the greater the usage near the endpoint. We define the night screen index (NSI) as the complement of the area under the curve of the cdf $f$, normalized by the total area of the box (=24). 
+\begin{equation}
+    \text{NSI} = 1 - \frac{1}{24}\sum_{x = 1}^{24}f(x) 
+\end{equation}
+
+
+The NSI varies between 0 and 1, and the larger the NSI, the greater the night usage. 
+The curve in Figure \ref{fig:hour_duration_share} has an NSI of 0.45. This is slightly lower than an NSI of 0.5 which would indicate perfectly uniform usage across the full day, but above an NSI of 0.4 that indicates uniform usage between 8 and midnight. 
+\textbf{Question}: What is the correct benchmark value for the NSI?
