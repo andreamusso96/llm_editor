@@ -17,13 +17,18 @@ cd llm_editor
 ```
 cp .env.example .env
 ```
-5. Get a gemini api key https://aistudio.google.com/api-keys and paste in the `.env` file where it says `GOOGLE_API_KEY=YOUR_API_KEY` 
+5. Get a Gemini api key https://aistudio.google.com/api-keys and paste in the `.env` file where it says 
+```
+GOOGLE_API_KEY=YOUR_API_KEY
+```
+All other environment variables you can leave as they are. 
 
 6. Start up the containers using docker compose
 ```
 docker compose up --build
 ```
-7. Paste this URL into your browser http://localhost:5173. You should see a frotend with "Writing Editor" as a title
+Wait a couple of seconds for the containers to boot up. 
+7. Paste this URL into your browser http://localhost:5173. You should see a website with "Writing Editor" as a title.
 
 ## Usage
 
@@ -34,7 +39,7 @@ docker compose up --build
 
 ## Adding Custom Prompts
 
-You can add you custom prompts. 
+You can add you custom prompts (WIP).
 To add new prompts, create YAML files in the `backend/database_setup/prompts/` directory following this structure:
 
 ```yaml
