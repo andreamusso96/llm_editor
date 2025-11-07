@@ -21,13 +21,13 @@ cp .env.example .env
 ```
 GOOGLE_API_KEY=YOUR_API_KEY
 ```
-All other environment variables you can leave as they are. 
+   All other environment variables you can leave as they are. 
 
 6. Start up the containers using docker compose
 ```
 docker compose up --build
 ```
-Wait a couple of seconds for the containers to boot up. 
+   Wait a couple of seconds for the containers to boot up. 
 7. Paste this URL into your browser http://localhost:5173. You should see a website with "Writing Editor" as a title.
 
 ## Usage
