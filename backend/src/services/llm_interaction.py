@@ -2,6 +2,7 @@ from typing import Type, TypeVar, Optional
 from pydantic import BaseModel
 import google.genai as genai
 import asyncio
+import random
 
 from src.utils import logger
 from config import GOOGLE_API_KEY
@@ -48,14 +49,17 @@ class LLMInteraction:
                 
             except Exception as e:
                 logger.error(f"Error during Gemini API call: {e}")
-                if current_retries == self.max_retries:
+                
+                current_retries += 1
+
+                if current_retries < self.max_retries:
+                    logger.warning(f"Retrying LLM call after {self.retry_delay} seconds")
+                    sleep_time = self.retry_delay * (2 ** current_retries)
+                    sleep_time += random.uniform(0, 1)
+                    sleep_time = max(sleep_time, 60) # Cap the sleep time at 60 seconds.
+                    await asyncio.sleep(sleep_time)
+                else:
                     logger.error(f"Failed to get raw output from LLM after {self.max_retries} retries")
                     return None
-                
-            current_retries += 1
-            if current_retries < self.max_retries:
-                logger.warning(f"Retrying LLM call after {self.retry_delay} seconds")
-                await asyncio.sleep(self.retry_delay)
 
-        logger.error(f"Failed to get raw output from LLM after {self.max_retries} retries")
         return None

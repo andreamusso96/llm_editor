@@ -9,6 +9,7 @@ from src.models import Correction, CorrectionStep, AnalysisResult, CorrectionSta
 from src.schemas.schemas_api import RichSegment, RichSegmentIssue, CorrectionStatusResponse, CorrectionResultResponse, CorrectionCreateResponse
 from src.schemas.schemas_llm import SnippetIssuesRevisionList
 from src.services.text_utils import split_text_into_paragraphs, locate_snippet_in_segment
+from config import RATE_LIMIT_RPM, CONCURRENT_LLM_CALLS
 
 
 class CorrectionService:
@@ -55,8 +56,34 @@ class CorrectionService:
     async def run_correction(self, correction_id: int):
         correction = self.db.query(Correction).filter(Correction.correction_id == correction_id).first()
         llm_step_coroutines = self._get_llm_coroutines(correction=correction)
+
+        # Limit the requests per minute to RATE_LIMIT_RPM.
+        rate_lock = asyncio.Lock()
+        min_interval = 60.0 / RATE_LIMIT_RPM 
+        next_allowed = 0.0
+
+        async def pace():
+            nonlocal next_allowed
+            async with rate_lock:
+                now = asyncio.get_running_loop().time()
+                # If we are ahead of schedule, wait
+                if now < next_allowed:
+                    await asyncio.sleep(next_allowed - now)
+                
+                next_allowed = max(now, next_allowed) + min_interval
+
+        # Limit the number of concurrent LLM calls to CONCURRENT_LLM_CALLS.
+        semaphore = asyncio.Semaphore(CONCURRENT_LLM_CALLS)
+
+        async def run_llm_step_coroutine_with_semaphore(coro):
+            async with semaphore:
+                await pace()
+                return await coro
+
+        tasks = [run_llm_step_coroutine_with_semaphore(coro) for coro in llm_step_coroutines]
+
         # It runs the LLM calls in parallel. Return exceptions just makes sures that it continues running even if one of the LLM calls fails.
-        await asyncio.gather(*llm_step_coroutines, return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
         self._construct_analysis_results(correction_id=correction_id)
         correction.status = CorrectionStatusEnum.COMPLETED
         self.db.commit()

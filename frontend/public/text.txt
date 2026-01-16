@@ -65,3 +65,5 @@ The larger the area, the closer to 6am the bulk of the usage. The complement of 
 The NSI varies between 0 and 1, and the larger the NSI, the greater the night usage. 
 The curve in Figure \ref{fig:hour_duration_share} has an NSI of 0.45. This is slightly lower than an NSI of 0.5 which would indicate perfectly uniform usage across the full day, but above an NSI of 0.4 that indicates uniform usage between 8 and midnight. 
 \textbf{Question}: What is the correct benchmark value for the NSI?
+
+IT WORRRDKS

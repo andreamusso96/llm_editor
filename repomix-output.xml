@@ -1,0 +1,2859 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+backend/
+  database_setup/
+    prompts/
+      mc_closkey.yml
+      mia.yml
+  src/
+    etl/
+      etl.py
+    schemas/
+      schemas_api.py
+      schemas_llm.py
+    services/
+      correction.py
+      llm_interaction.py
+      text_utils.py
+    api.py
+    models.py
+    utils.py
+  config.py
+  docker-entrypoint.sh
+  fastapi_test.py
+  init.py
+  main.py
+  requirements.txt
+frontend/
+  public/
+    text.txt
+    vite.svg
+  src/
+    assets/
+      react.svg
+    components/
+      IssueTooltip.tsx
+      ProgressBar.tsx
+      PromptList.tsx
+      ResultDisplay.tsx
+      RichSegmentDisplay.tsx
+    services/
+      correctionService.ts
+    types/
+      api.ts
+    App.tsx
+    index.css
+    main.tsx
+    vite-env.d.ts
+  .gitignore
+  eslint.config.js
+  index.html
+  package.json
+  tailwind.config.js
+  tsconfig.app.json
+  tsconfig.json
+  tsconfig.node.json
+  vite.config.ts
+.env.example
+.gitignore
+docker-compose.yml
+Dockerfile.backend
+README.md
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="backend/src/etl/etl.py">
+from src.models import Prompt, InputGranularityEnum
+from sqlalchemy.orm import Session
+from typing import List, Dict, Any
+import yaml
+import os
+from config import PROJECT_DIR
+
+
+class ETLService:
+    def __init__(self, db: Session, prompt_files: List[str]):
+        self.db = db
+        self.prompt_dir = os.path.join(PROJECT_DIR, "database_setup/prompts/")
+        self.prompt_files = prompt_files
+
+    def _load_prompts_from_yaml(self) -> List[Dict[str, Any]]:
+        for file in self.prompt_files:
+            with open(os.path.join(self.prompt_dir, file), 'r') as file:
+                prompts = yaml.safe_load(file)
+        return prompts
+    
+
+    def load_prompts_from_yaml_to_db(self):
+        prompts = self._load_prompts_from_yaml()
+
+        for prompt in prompts:
+            prompt_model = Prompt(
+                prompt_id_ref=prompt['prompt_id_ref'],
+                description=prompt['description'],
+                input_granularity=InputGranularityEnum(prompt['input_granularity']),
+                text=prompt['prompt']
+            )
+            self.db.add(prompt_model)
+        self.db.commit()
+
+
+class ETLServiceMia(ETLService):
+    def __init__(self, db: Session):
+        super().__init__(db, prompt_files=["mia.yml"])
+</file>
+
+<file path="backend/src/schemas/schemas_api.py">
+from pydantic import BaseModel
+from typing import List, Optional
+
+class Prompt(BaseModel):
+    prompt_id_ref: str
+    prompt_description: Optional[str] = None
+
+class PromptList(BaseModel):
+    prompts: List[Prompt]
+
+class CorrectionCreateRequest(BaseModel):
+    text_content: str
+    prompt_id_refs: List[str]
+
+class CorrectionCreateResponse(BaseModel):
+    correction_id: int
+
+class CorrectionStatusResponse(BaseModel):
+    correction_id: int
+    status: str
+    progress: float
+
+class RichSegmentIssue(BaseModel):
+    prompt_id_ref: str
+    issue: str
+    revision: str
+
+class RichSegment(BaseModel):
+    text: str
+    start_char: int
+    end_char: int
+    issues: List[RichSegmentIssue]
+
+    def __lt__(self, other):
+        return self.start_char < other.start_char
+
+class CorrectionResultResponse(BaseModel):
+    correction_id: int
+    original_text: str
+    status: str
+    rich_segments: List[RichSegment] | None = None
+</file>
+
+<file path="backend/src/schemas/schemas_llm.py">
+from pydantic import BaseModel, Field
+from typing import List as PyList
+
+
+class SnippetIssueRevision(BaseModel):
+    snippet: str = Field(description="The snippet of TEXT that contains the issue")
+    sentence_context: str = Field(description="The full sentence in the TEXT that contains the issue")
+    issue: str = Field(description="The issue that is present in the snippet")
+    revision: str = Field(description="The revision that corrects the issue")
+
+class SnippetIssuesRevisionList(BaseModel):
+    issues: PyList[SnippetIssueRevision] = Field(description="A list of issues")
+</file>
+
+<file path="backend/src/services/correction.py">
+from typing import List, Callable
+from sqlalchemy.orm import Session
+import jinja2
+import asyncio
+
+from src.services.llm_interaction import LLMInteraction
+from src.utils import logger, get_db_context
+from src.models import Correction, CorrectionStep, AnalysisResult, CorrectionStatusEnum, Prompt, InputGranularityEnum
+from src.schemas.schemas_api import RichSegment, RichSegmentIssue, CorrectionStatusResponse, CorrectionResultResponse, CorrectionCreateResponse
+from src.schemas.schemas_llm import SnippetIssuesRevisionList
+from src.services.text_utils import split_text_into_paragraphs, locate_snippet_in_segment
+
+
+class CorrectionService:
+    def __init__(self, db: Session, llm_model_name: str):
+        self.db = db
+        self.llm = LLMInteraction(model_name=llm_model_name)
+
+    def create_new_correction(self, original_text: str, prompt_id_refs: List[str]) -> CorrectionCreateResponse:
+        logger.debug(f"Initiating correction for {original_text} with prompts {prompt_id_refs}")
+        new_correction = Correction(original_text=original_text, status=CorrectionStatusEnum.PENDING)
+        self.db.add(new_correction)
+        self.db.commit()
+        self._add_correction_steps(correction_id=new_correction.correction_id, prompt_id_refs=prompt_id_refs, original_text=original_text)
+        self.db.commit()
+        return CorrectionCreateResponse(correction_id=new_correction.correction_id)
+
+            
+    def _add_correction_steps(self, correction_id: int, prompt_id_refs: List[str], original_text: str):
+        for prompt_id_ref in prompt_id_refs:
+            base_prompt = self.db.query(Prompt).filter(Prompt.prompt_id_ref == prompt_id_ref, Prompt.is_enabled == True).first()
+            if base_prompt.input_granularity == InputGranularityEnum.WHOLE_TEXT:
+                correction_step = CorrectionStep(correction_id=correction_id, 
+                                                 prompt_id=base_prompt.prompt_id, 
+                                                 input_text_sent_to_llm=original_text, 
+                                                 original_text_start_char=0,
+                                                 paragraph_index=None, 
+                                                 status=CorrectionStatusEnum.PENDING)
+                self.db.add(correction_step)
+    
+            elif base_prompt.input_granularity == InputGranularityEnum.PARAGRAPH:
+                paragraphs_with_offsets = split_text_into_paragraphs(original_text)
+                for idx, (paragraph, start_offset) in enumerate(paragraphs_with_offsets):
+                    if not paragraph.strip():
+                        continue
+
+                    correction_step = CorrectionStep(correction_id=correction_id, 
+                                                    prompt_id=base_prompt.prompt_id, 
+                                                    input_text_sent_to_llm=paragraph, 
+                                                    original_text_start_char=start_offset,
+                                                    paragraph_index=idx, 
+                                                    status=CorrectionStatusEnum.PENDING)
+                    self.db.add(correction_step)
+
+    async def run_correction(self, correction_id: int):
+        correction = self.db.query(Correction).filter(Correction.correction_id == correction_id).first()
+        llm_step_coroutines = self._get_llm_coroutines(correction=correction)
+        # It runs the LLM calls in parallel. Return exceptions just makes sures that it continues running even if one of the LLM calls fails.
+        await asyncio.gather(*llm_step_coroutines, return_exceptions=True)
+        self._construct_analysis_results(correction_id=correction_id)
+        correction.status = CorrectionStatusEnum.COMPLETED
+        self.db.commit()
+
+
+    def _get_llm_coroutines(self, correction: Correction):
+        llm_calls = []
+        for step in correction.steps:
+            input_text = step.input_text_sent_to_llm
+            prompt = jinja2.Template(step.prompt.text).render(
+                input_text=input_text
+            )
+            llm_coro = self.llm.get_validated_response(
+                prompt=prompt,
+                response_model=SnippetIssuesRevisionList
+            )
+
+            llm_calls.append(self._run_llm_step(correction_step_id=step.correction_step_id, llm_coroutine=llm_coro))
+
+        return llm_calls
+
+    async def _run_llm_step(self, correction_step_id: int, llm_coroutine: Callable):
+        try: 
+            result = await llm_coroutine
+        except Exception as e:
+            with get_db_context() as db:
+                logger.error(f"Error running LLM step {correction_step_id}: {e}")
+                correction_step = db.query(CorrectionStep).filter(CorrectionStep.correction_step_id == correction_step_id).first()
+                correction_step.status = CorrectionStatusEnum.FAILED
+                db.commit()
+                return
+        
+        with get_db_context() as db:
+            correction_step = db.query(CorrectionStep).filter(CorrectionStep.correction_step_id == correction_step_id).first()
+            correction_step.llm_response = result.model_dump()
+            correction_step.status = CorrectionStatusEnum.COMPLETED
+            db.commit()
+
+
+    def _construct_analysis_results(self, correction_id: int):
+        with get_db_context() as db:
+            correction = db.query(Correction).filter(Correction.correction_id == correction_id).first()
+            for step in correction.steps:
+                if step.status == CorrectionStatusEnum.COMPLETED:
+                    issues = step.llm_response['issues']
+                    for issue_item in issues:
+                        start_char, end_char = locate_snippet_in_segment(
+                            segment_text=step.input_text_sent_to_llm,
+                            segment_global_start_offset=step.original_text_start_char,
+                            snippet=issue_item["snippet"],
+                            sentence_context=issue_item["sentence_context"]
+                        )
+
+                        analysis_result = AnalysisResult(
+                            correction_step_id=step.correction_step_id,
+                            snippet=issue_item["snippet"],
+                            issue=issue_item["issue"],
+                            revision=issue_item["revision"],
+                            original_text_start_char=start_char,
+                            original_text_end_char=end_char
+                        )
+
+                        db.add(analysis_result)
+
+    def get_correction_status(self, correction_id: int) -> CorrectionStatusResponse:
+        correction = self.db.query(Correction).filter(Correction.correction_id == correction_id).first()
+        total_steps = len(correction.steps)
+        completed_steps = len([step for step in correction.steps if step.status in [CorrectionStatusEnum.COMPLETED, CorrectionStatusEnum.FAILED]])
+        progress = completed_steps / total_steps if total_steps > 0 else 0
+        return CorrectionStatusResponse(correction_id=correction.correction_id, status=correction.status.value, progress=progress)
+
+    def get_correction_results(self, correction_id: int) -> CorrectionResultResponse:
+        correction = self.db.query(Correction).filter(Correction.correction_id == correction_id).first()
+        
+        if not correction:
+            logger.error(f"Correction with id {correction_id} not found")
+            raise ValueError(f"Correction with id {correction_id} not found")
+        
+        if correction.status != CorrectionStatusEnum.COMPLETED:
+            return CorrectionResultResponse(correction_id=correction.correction_id, 
+                                            original_text=correction.original_text, 
+                                            status=correction.status.value, 
+                                            rich_segments=None)
+        
+        analysis_items = []
+        for step in correction.steps:
+            analysis_items.extend(step.analysis_results)
+        
+        if not analysis_items:
+            return CorrectionResultResponse(
+                correction_id=correction.correction_id, 
+                original_text=correction.original_text, 
+                status=correction.status.value, 
+                rich_segments=[RichSegment(text=correction.original_text, start_char=0, end_char=len(correction.original_text), issues=[])]
+            )
+        
+        original_text = correction.original_text
+        points = {0, len(original_text)}
+        for item in analysis_items:
+            if item.original_text_start_char is not None and item.original_text_end_char >= 0 and item.original_text_start_char < item.original_text_end_char:
+                points.add(item.original_text_start_char)
+                points.add(item.original_text_end_char)
+
+        # Sort and ensure points are unique and create valid segments
+        unique_sorted_points = sorted(list(points))
+
+        rich_segments = [] 
+        for i in range(len(unique_sorted_points) - 1):
+            start_char = unique_sorted_points[i]
+            end_char = unique_sorted_points[i + 1]
+            
+            segment_text = original_text[start_char:end_char]
+            issues_for_segment = []
+            for item in analysis_items:
+                if item.original_text_start_char <= start_char and item.original_text_end_char >= end_char:
+                    issues_for_segment.append(RichSegmentIssue(prompt_id_ref=item.correction_step.prompt.prompt_id_ref, 
+                                                               issue=item.issue, 
+                                                               revision=item.revision))
+
+
+            rich_segments.append(RichSegment(text=segment_text, start_char=start_char, end_char=end_char, issues=issues_for_segment))
+
+        rich_segments.sort()
+        return CorrectionResultResponse(correction_id=correction.correction_id, 
+                                        original_text=correction.original_text, 
+                                        status=correction.status.value, 
+                                        rich_segments=rich_segments)
+</file>
+
+<file path="backend/src/services/llm_interaction.py">
+from typing import Type, TypeVar, Optional
+from pydantic import BaseModel
+import google.genai as genai
+import asyncio
+
+from src.utils import logger
+from config import GOOGLE_API_KEY
+
+# Define a generic type for Pydantic models
+T = TypeVar('T', bound=BaseModel)
+
+class LLMInteraction:
+    def __init__(self, model_name: str, max_retries: int = 3, retry_delay: int = 3):
+        """
+        Initializes the LLM Interaction Module with a specific Gemini model,
+        configured for JSON output.
+
+        Args:
+            model_name (str): The name of the Gemini model to use (e.g., "gemini-pro", "gemini-1.5-flash").
+        """
+        self.model_name = model_name
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
+        self.client = genai.Client(api_key=GOOGLE_API_KEY)
+
+    async def get_validated_response(self, prompt: str, response_model: Type[T]) -> Optional[T]:
+        """
+        Gets a raw string output (expected to be JSON) from the Gemini LLM.
+        """
+        current_retries = 0
+
+        while current_retries < self.max_retries:
+            try:
+                config = {
+                    "response_mime_type": "application/json",
+                    "response_schema": response_model
+                }
+                response = await self.client.aio.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt,
+                    config=config
+                )
+
+                if response.parsed:
+                    return response.parsed
+                else:
+                    raise ValueError("No response from LLM")
+                
+            except Exception as e:
+                logger.error(f"Error during Gemini API call: {e}")
+                if current_retries == self.max_retries:
+                    logger.error(f"Failed to get raw output from LLM after {self.max_retries} retries")
+                    return None
+                
+            current_retries += 1
+            if current_retries < self.max_retries:
+                logger.warning(f"Retrying LLM call after {self.retry_delay} seconds")
+                await asyncio.sleep(self.retry_delay)
+
+        logger.error(f"Failed to get raw output from LLM after {self.max_retries} retries")
+        return None
+</file>
+
+<file path="backend/src/services/text_utils.py">
+import re
+from typing import List, Tuple
+from src.utils import logger
+
+def split_text_into_paragraphs(text: str) -> List[Tuple[str, int]]:
+    """
+    Splits a given text into paragraphs based on blank lines (one or more empty
+    or whitespace-only lines) and returns each paragraph with its starting
+    character offset in the original text.
+
+    Args:
+        text: The input string.
+
+    Returns:
+        A list of tuples, where each tuple is (paragraph_text, start_offset).
+    """
+    paragraphs_with_offsets: List[Tuple[str, int]] = []
+    if not text.strip():
+        return []
+    
+    start_offset = 0
+    while start_offset < len(text):
+        # Find the end of the current paragraph
+        # A paragraph ends before two or more newlines, or at the end of the text.
+        end_of_paragraph_marker = re.search(r'\n\s*\n', text[start_offset:])
+        
+        if end_of_paragraph_marker:
+            # The paragraph text ends where the marker begins.
+            # The marker itself indicates the separation.
+            para_end_offset_in_slice = end_of_paragraph_marker.start()
+            paragraph_text = text[start_offset : start_offset + para_end_offset_in_slice]
+            
+            # The next paragraph will start after the marker.
+            # The marker is text[start_offset + para_end_offset_in_slice : start_offset + end_of_paragraph_marker.end()]
+            next_para_start_offset = start_offset + end_of_paragraph_marker.end()
+        else:
+            # No more double newlines, so the rest of the text is the last paragraph
+            paragraph_text = text[start_offset:]
+            next_para_start_offset = len(text) # End of text
+
+        # Add paragraph if it's not just whitespace
+        # However, for your use case, you might want to preserve paragraphs that are
+        # just whitespace if the LLM could comment on them or if it affects numbering.
+        # For now, let's strip and check if non-empty.
+        trimmed_paragraph = paragraph_text.strip()
+        if trimmed_paragraph: # Only add non-empty paragraphs
+            paragraphs_with_offsets.append((paragraph_text, start_offset)) # Store original paragraph text
+        elif paragraph_text:
+            pass
+
+
+        start_offset = next_para_start_offset
+
+    return paragraphs_with_offsets
+    
+
+def locate_snippet_in_segment(segment_text: str, segment_global_start_offset: int, snippet: str, sentence_context: str) -> Tuple[int, int]:
+    try: 
+        # TODO: If there the same sentence has twice an error with the same original snippet, this will not work.
+        # We will attribute both errors to the first occurence of the original snippet. This is a minor issue for now. But we should fix it.
+        full_sentence_context_start_pos = segment_text.find(sentence_context)
+        full_sentence_context_end_pos = full_sentence_context_start_pos + len(sentence_context)
+
+        if full_sentence_context_start_pos == -1:
+            snippet_start_pos = segment_text.find(snippet)
+            snippet_end_pos = snippet_start_pos + len(snippet)
+        else:
+            full_sentence_context = segment_text[full_sentence_context_start_pos:full_sentence_context_end_pos]
+            snippet_start_pos = full_sentence_context_start_pos + full_sentence_context.find(snippet)
+            snippet_end_pos = snippet_start_pos + len(snippet)
+        
+        if snippet_start_pos == -1:
+            logger.warning(f"Original snippet not found in user submission: {sentence_context}")
+            return -1, -1
+        
+        global_snippet_start_pos = segment_global_start_offset + snippet_start_pos
+        global_snippet_end_pos = segment_global_start_offset + snippet_end_pos
+
+        return global_snippet_start_pos, global_snippet_end_pos
+
+    except ValueError:
+        logger.warning(f"Snippet {snippet} not found in segment: {segment_text}")
+        return -1, -1
+
+if __name__ == "__main__":
+    text = """
+    This is a test.
+    This is a test.
+
+    This is a test.
+    This is a test. Beljfheljrh
+
+    This is a test.
+    This is a test.
+
+    This is a test.
+    This is a test.
+    """
+
+    print(split_text_into_paragraphs(text))
+
+    print(locate_snippet_in_segment(text, 0, "Beljfheljrh."))
+</file>
+
+<file path="backend/src/utils.py">
+from contextlib import contextmanager
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, Session
+from typing import Generator
+import logging
+
+from config import SQLALCHEMY_DATABASE_URL
+from src.models import Base
+
+
+# Configure logging with formatter
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+logger = logging.getLogger('database')
+logger.setLevel(logging.DEBUG)
+
+
+# Create engine with psycopg2
+engine = create_engine(
+    SQLALCHEMY_DATABASE_URL
+)
+
+def init_db():
+    """Initialize the database by creating all tables."""
+    logger.info("Creating database tables...")
+    Base.metadata.create_all(bind=engine)
+    logger.info("Database tables created successfully!")
+
+# Create session factory
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+def get_db() -> Generator[Session, None, None]:
+    """
+    Get a database session.
+    """
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+@contextmanager
+def get_db_context() -> Generator[Session, None, None]:
+    """
+    Context manager for database sessions.
+    Usage:
+        with get_db_context() as db:
+            # use db session
+            db.commit()
+    """
+    db = SessionLocal()
+    try:
+        yield db
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise e
+    finally:
+        db.close()
+</file>
+
+<file path="backend/docker-entrypoint.sh">
+#!/usr/bin/env sh
+set -e
+
+STATE_FILE=/var/lib/app/.init_done
+mkdir -p "$(dirname "$STATE_FILE")"
+
+if [ ! -f "$STATE_FILE" ]; then
+  echo "[entrypoint] first boot: running init"
+  python /app/init.py
+  # write a timestamp so we can log when init happened
+  date > "$STATE_FILE"
+else
+  echo "[entrypoint] init already done on $(cat "$STATE_FILE"), skipping"
+fi
+
+# Hand off to the main process (PID 1)
+exec "$@"
+</file>
+
+<file path="backend/init.py">
+import asyncio
+
+def test_etl():
+    from src.etl.etl import ETLServiceMia
+    from src.utils import get_db_context, init_db, engine
+    from src.models import Base
+    Base.metadata.drop_all(bind=engine)
+    init_db()
+    with get_db_context() as db:
+        etl_service = ETLServiceMia(db)
+        etl_service.load_prompts_from_yaml_to_db()
+
+
+async def test_correction():
+    from src.services.correction import CorrectionService
+    from src.utils import get_db_context
+    from src.models import Prompt
+    text_path = '/Users/andrea/Desktop/PhD/llm_editor/frontend/public/text.txt'
+    with open(text_path, 'r') as file:
+        text = file.read()
+
+    with get_db_context() as db:
+        prompt_ids = db.query(Prompt).filter(Prompt.is_enabled == True).all()
+        prompt_id_refs = [prompt.prompt_id_ref for prompt in prompt_ids[:3]]
+
+        correction_service = CorrectionService(db, llm_model_name="gemini-1.5-flash-8b")
+        response = correction_service.create_new_correction(original_text=text, prompt_id_refs=prompt_id_refs)
+        await correction_service.run_correction(correction_id=response.correction_id)
+        correction_service.get_correction_status(correction_id=response.correction_id)
+        correction_service.get_correction_results(correction_id=response.correction_id)
+
+def load_prompts_to_db():
+    from src.etl.etl import ETLServiceMia
+    from src.utils import get_db_context, init_db, engine
+    from src.models import Base
+    Base.metadata.drop_all(bind=engine)
+    init_db()
+    with get_db_context() as db:
+        etl_service = ETLServiceMia(db)
+        etl_service.load_prompts_from_yaml_to_db()
+
+if __name__ == "__main__":
+    load_prompts_to_db()
+    # asyncio.run(test_correction())
+</file>
+
+<file path="backend/main.py">
+# src/main.py
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from src.api import router as corrections_router # Your router
+from src.utils import init_db, engine # Your DB init
+from src.models import Base # Your SQLAlchemy Base
+
+# Optional: Create DB tables if they don't exist (for development)
+# In production, you'd use migrations (e.g., Alembic)
+# Base.metadata.create_all(bind=engine) # Or call init_db()
+# init_db() # If you prefer your function
+
+app = FastAPI(
+    title="LLM Editor Backend",
+    description="API for managing text corrections using LLM prompts.",
+    version="0.1.0"
+)
+
+app.include_router(corrections_router)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",  # Keep for local frontend development (if applicable)
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/")
+async def root():
+    return {"message": "Welcome to the LLM Editor API!"}
+</file>
+
+<file path="frontend/public/vite.svg">
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" aria-hidden="true" role="img" class="iconify iconify--logos" width="31.88" height="32" preserveAspectRatio="xMidYMid meet" viewBox="0 0 256 257"><defs><linearGradient id="IconifyId1813088fe1fbc01fb466" x1="-.828%" x2="57.636%" y1="7.652%" y2="78.411%"><stop offset="0%" stop-color="#41D1FF"></stop><stop offset="100%" stop-color="#BD34FE"></stop></linearGradient><linearGradient id="IconifyId1813088fe1fbc01fb467" x1="43.376%" x2="50.316%" y1="2.242%" y2="89.03%"><stop offset="0%" stop-color="#FFEA83"></stop><stop offset="8.333%" stop-color="#FFDD35"></stop><stop offset="100%" stop-color="#FFA800"></stop></linearGradient></defs><path fill="url(#IconifyId1813088fe1fbc01fb466)" d="M255.153 37.938L134.897 252.976c-2.483 4.44-8.862 4.466-11.382.048L.875 37.958c-2.746-4.814 1.371-10.646 6.827-9.67l120.385 21.517a6.537 6.537 0 0 0 2.322-.004l117.867-21.483c5.438-.991 9.574 4.796 6.877 9.62Z"></path><path fill="url(#IconifyId1813088fe1fbc01fb467)" d="M185.432.063L96.44 17.501a3.268 3.268 0 0 0-2.634 3.014l-5.474 92.456a3.268 3.268 0 0 0 3.997 3.378l24.777-5.718c2.318-.535 4.413 1.507 3.936 3.838l-7.361 36.047c-.495 2.426 1.782 4.5 4.151 3.78l15.304-4.649c2.372-.72 4.652 1.36 4.15 3.788l-11.698 56.621c-.732 3.542 3.979 5.473 5.943 2.437l1.313-2.028l72.516-144.72c1.215-2.423-.88-5.186-3.54-4.672l-25.505 4.922c-2.396.462-4.435-1.77-3.759-4.114l16.646-57.705c.677-2.35-1.37-4.583-3.769-4.113Z"></path></svg>
+</file>
+
+<file path="frontend/src/assets/react.svg">
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" aria-hidden="true" role="img" class="iconify iconify--logos" width="35.93" height="32" preserveAspectRatio="xMidYMid meet" viewBox="0 0 256 228"><path fill="#00D8FF" d="M210.483 73.824a171.49 171.49 0 0 0-8.24-2.597c.465-1.9.893-3.777 1.273-5.621c6.238-30.281 2.16-54.676-11.769-62.708c-13.355-7.7-35.196.329-57.254 19.526a171.23 171.23 0 0 0-6.375 5.848a155.866 155.866 0 0 0-4.241-3.917C100.759 3.829 77.587-4.822 63.673 3.233C50.33 10.957 46.379 33.89 51.995 62.588a170.974 170.974 0 0 0 1.892 8.48c-3.28.932-6.445 1.924-9.474 2.98C17.309 83.498 0 98.307 0 113.668c0 15.865 18.582 31.778 46.812 41.427a145.52 145.52 0 0 0 6.921 2.165a167.467 167.467 0 0 0-2.01 9.138c-5.354 28.2-1.173 50.591 12.134 58.266c13.744 7.926 36.812-.22 59.273-19.855a145.567 145.567 0 0 0 5.342-4.923a168.064 168.064 0 0 0 6.92 6.314c21.758 18.722 43.246 26.282 56.54 18.586c13.731-7.949 18.194-32.003 12.4-61.268a145.016 145.016 0 0 0-1.535-6.842c1.62-.48 3.21-.974 4.76-1.488c29.348-9.723 48.443-25.443 48.443-41.52c0-15.417-17.868-30.326-45.517-39.844Zm-6.365 70.984c-1.4.463-2.836.91-4.3 1.345c-3.24-10.257-7.612-21.163-12.963-32.432c5.106-11 9.31-21.767 12.459-31.957c2.619.758 5.16 1.557 7.61 2.4c23.69 8.156 38.14 20.213 38.14 29.504c0 9.896-15.606 22.743-40.946 31.14Zm-10.514 20.834c2.562 12.94 2.927 24.64 1.23 33.787c-1.524 8.219-4.59 13.698-8.382 15.893c-8.067 4.67-25.32-1.4-43.927-17.412a156.726 156.726 0 0 1-6.437-5.87c7.214-7.889 14.423-17.06 21.459-27.246c12.376-1.098 24.068-2.894 34.671-5.345a134.17 134.17 0 0 1 1.386 6.193ZM87.276 214.515c-7.882 2.783-14.16 2.863-17.955.675c-8.075-4.657-11.432-22.636-6.853-46.752a156.923 156.923 0 0 1 1.869-8.499c10.486 2.32 22.093 3.988 34.498 4.994c7.084 9.967 14.501 19.128 21.976 27.15a134.668 134.668 0 0 1-4.877 4.492c-9.933 8.682-19.886 14.842-28.658 17.94ZM50.35 144.747c-12.483-4.267-22.792-9.812-29.858-15.863c-6.35-5.437-9.555-10.836-9.555-15.216c0-9.322 13.897-21.212 37.076-29.293c2.813-.98 5.757-1.905 8.812-2.773c3.204 10.42 7.406 21.315 12.477 32.332c-5.137 11.18-9.399 22.249-12.634 32.792a134.718 134.718 0 0 1-6.318-1.979Zm12.378-84.26c-4.811-24.587-1.616-43.134 6.425-47.789c8.564-4.958 27.502 2.111 47.463 19.835a144.318 144.318 0 0 1 3.841 3.545c-7.438 7.987-14.787 17.08-21.808 26.988c-12.04 1.116-23.565 2.908-34.161 5.309a160.342 160.342 0 0 1-1.76-7.887Zm110.427 27.268a347.8 347.8 0 0 0-7.785-12.803c8.168 1.033 15.994 2.404 23.343 4.08c-2.206 7.072-4.956 14.465-8.193 22.045a381.151 381.151 0 0 0-7.365-13.322Zm-45.032-43.861c5.044 5.465 10.096 11.566 15.065 18.186a322.04 322.04 0 0 0-30.257-.006c4.974-6.559 10.069-12.652 15.192-18.18ZM82.802 87.83a323.167 323.167 0 0 0-7.227 13.238c-3.184-7.553-5.909-14.98-8.134-22.152c7.304-1.634 15.093-2.97 23.209-3.984a321.524 321.524 0 0 0-7.848 12.897Zm8.081 65.352c-8.385-.936-16.291-2.203-23.593-3.793c2.26-7.3 5.045-14.885 8.298-22.6a321.187 321.187 0 0 0 7.257 13.246c2.594 4.48 5.28 8.868 8.038 13.147Zm37.542 31.03c-5.184-5.592-10.354-11.779-15.403-18.433c4.902.192 9.899.29 14.978.29c5.218 0 10.376-.117 15.453-.343c-4.985 6.774-10.018 12.97-15.028 18.486Zm52.198-57.817c3.422 7.8 6.306 15.345 8.596 22.52c-7.422 1.694-15.436 3.058-23.88 4.071a382.417 382.417 0 0 0 7.859-13.026a347.403 347.403 0 0 0 7.425-13.565Zm-16.898 8.101a358.557 358.557 0 0 1-12.281 19.815a329.4 329.4 0 0 1-23.444.823c-7.967 0-15.716-.248-23.178-.732a310.202 310.202 0 0 1-12.513-19.846h.001a307.41 307.41 0 0 1-10.923-20.627a310.278 310.278 0 0 1 10.89-20.637l-.001.001a307.318 307.318 0 0 1 12.413-19.761c7.613-.576 15.42-.876 23.31-.876H128c7.926 0 15.743.303 23.354.883a329.357 329.357 0 0 1 12.335 19.695a358.489 358.489 0 0 1 11.036 20.54a329.472 329.472 0 0 1-11 20.722Zm22.56-122.124c8.572 4.944 11.906 24.881 6.52 51.026c-.344 1.668-.73 3.367-1.15 5.09c-10.622-2.452-22.155-4.275-34.23-5.408c-7.034-10.017-14.323-19.124-21.64-27.008a160.789 160.789 0 0 1 5.888-5.4c18.9-16.447 36.564-22.941 44.612-18.3ZM128 90.808c12.625 0 22.86 10.235 22.86 22.86s-10.235 22.86-22.86 22.86s-22.86-10.235-22.86-22.86s10.235-22.86 22.86-22.86Z"></path></svg>
+</file>
+
+<file path="frontend/src/components/IssueTooltip.tsx">
+import React, { useState, useEffect, useMemo } from 'react';
+import type { RichSegment } from '../types/api';
+import { HiChevronLeft, HiChevronRight, HiX } from 'react-icons/hi';
+
+// TooltipPosition type can remain as is or be moved to types/ui.ts if you prefer
+export type TooltipPosition = {
+  top: number;
+  left: number;
+};
+
+interface IssueTooltipProps {
+  segmentWithIssues: RichSegment | null;
+  position: TooltipPosition | null;
+  onClose: () => void;
+  promptIdsSelectedForResultDisplay: string[];
+}
+
+// Renamed from ErrorDisplayTooltip to IssueTooltip
+function IssueTooltip({ segmentWithIssues, position, onClose, promptIdsSelectedForResultDisplay }: IssueTooltipProps): React.ReactElement | null {
+  const [currentIssueIndex, setCurrentIssueIndex] = useState(0);
+
+  useEffect(() => {
+    // Reset to the first issue when the segment changes
+    setCurrentIssueIndex(0);
+  }, [segmentWithIssues, promptIdsSelectedForResultDisplay]);
+
+  const issuesToDisplay = useMemo(() => {
+    if (!segmentWithIssues || !segmentWithIssues.issues) {
+      return [];
+    }
+    return segmentWithIssues.issues.filter(issue => promptIdsSelectedForResultDisplay.includes(issue.prompt_id_ref));
+  }, [segmentWithIssues, promptIdsSelectedForResultDisplay]);
+
+  // Return if tooltip should not be displayed
+  // Check segmentWithIssues and segmentWithIssues.issues
+  if (!segmentWithIssues || !segmentWithIssues.issues || segmentWithIssues.issues.length === 0 || !position) {
+    return null;
+  }
+
+  // Use RichSegmentIssue[] and segment.issues
+  const totalIssues = issuesToDisplay.length;
+  const currentIssue = issuesToDisplay[currentIssueIndex];
+
+  const handleNextIssue = () => {
+    setCurrentIssueIndex((prevIndex) => (prevIndex + 1) % totalIssues);
+  };
+
+  const handlePrevIssue = () => {
+    setCurrentIssueIndex((prevIndex) => (prevIndex - 1 + totalIssues) % totalIssues);
+  };
+
+  return (
+    <div
+      className="fixed bg-zinc-700 text-white p-4 rounded-lg shadow-xl z-50 w-80 max-w-md"
+      style={{ top: `${position.top + 15}px`, left: `${position.left + 15}px` }}
+      role="tooltip"
+      aria-live="polite"
+    >
+      {/* Header Section: Title, Navigation, and Close Button */}
+      <div className="flex justify-between items-center mb-3">
+        <h3 className="text-lg text-blue-400">
+          {/* Updated title from "Mistake" to "Issue/Suggestion" */}
+          {totalIssues} Suggestion{totalIssues > 1 ? 's' : ''}
+          {totalIssues > 1 && ` (${currentIssueIndex + 1}/${totalIssues})`}
+        </h3>
+        <div className="flex items-center space-x-2">
+          {totalIssues > 1 && (
+            <>
+              <button
+                onClick={handlePrevIssue}
+                className="p-1 rounded-full hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-500"
+              >
+                <HiChevronLeft size={20} />
+              </button>
+              <button
+                onClick={handleNextIssue}
+                className="p-1 rounded-full hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-500"
+              >
+                <HiChevronRight size={20} />
+              </button>
+            </>
+          )}
+          <button
+            onClick={onClose}
+            className="p-1 rounded-full hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-500"
+          >
+            <HiX size={20} />
+          </button>
+        </div>
+      </div>
+
+      {/* Issue Details - Mapped from RichSegmentIssue fields */}
+      <div className="space-y-3 text-sm">
+        {/* Display prompt_id_ref if you want */}
+        {currentIssue.prompt_id_ref && (
+          <div>
+            <span className="font-semibold text-gray-400">Source Prompt:</span>
+            <p className="mt-0.5 text-gray-300">{currentIssue.prompt_id_ref}</p>
+          </div>
+        )}
+        <div>
+          <span className="font-semibold text-blue-400">Issue:</span>
+          {/* Using currentIssue.issue for explanation */}
+          <p className="mt-0.5">{currentIssue.issue}</p>
+        </div>
+        <div>
+          <span className="font-semibold text-blue-400">Suggested Revision:</span>
+          {/* Using currentIssue.revision for corrected snippet */}
+          <p className="mt-0.5">
+            {currentIssue.revision}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default IssueTooltip;
+// export type { TooltipPosition }; // TooltipPosition is already exported above
+</file>
+
+<file path="frontend/src/components/ProgressBar.tsx">
+// src/components/ProgressBar.tsx
+import React from 'react';
+
+interface ProgressBarProps {
+  progress: number; // A value between 0 and 1
+  statusText?: string; // Optional text to display, e.g., current status
+}
+
+const ProgressBar: React.FC<ProgressBarProps> = ({ progress, statusText }) => {
+  const percentage = Math.max(0, Math.min(100, Math.round(progress * 100)));
+
+  return (
+    <div>
+      {statusText && (
+        <p className="text-sm text-gray-600 mb-1 text-center">
+          {statusText}
+        </p>
+      )}
+      <div className="w-full bg-gray-200 rounded-full h-4 dark:bg-gray-700 overflow-hidden">
+        <div
+          className="bg-blue-600 h-4 rounded-full text-xs font-medium text-blue-100 text-center p-0.5 leading-none transition-all duration-300 ease-out"
+          style={{ width: `${percentage}%` }}
+          role="progressbar"
+          aria-valuenow={percentage}
+          aria-valuemin={0}
+          aria-valuemax={100}
+        >
+          {percentage}%
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default ProgressBar;
+</file>
+
+<file path="frontend/src/components/PromptList.tsx">
+import type { Prompt } from '../types/api';
+
+interface PromptsListProps {
+    availablePrompts: Prompt[];
+    selectedPromptIds: string[];
+    onSelectedPromptIdsChange: (selectedIds: string[]) => void;
+    listTitle?: string;
+  }
+
+const PromptsList: React.FC<PromptsListProps> = ({ availablePrompts, selectedPromptIds, onSelectedPromptIdsChange, listTitle }) => {
+  const handleCheckboxChange = (promptIdRef: string) => {
+    const newSelectedPromptIds = selectedPromptIds.includes(promptIdRef)
+      ? selectedPromptIds.filter(id => id !== promptIdRef)
+      : [...selectedPromptIds, promptIdRef];
+    onSelectedPromptIdsChange(newSelectedPromptIds);
+  };
+
+  if (!availablePrompts) {
+    return <div className="text-gray-500">Loading prompts data...</div>; // Or handle as error
+  }
+
+  if (availablePrompts.length === 0) {
+    return <div className="text-gray-500">No prompts available.</div>;
+  }
+
+  return (
+    <div>
+      {listTitle && <h3 className="text-md font-semibold mb-2 text-white">{listTitle}</h3>}
+      <div className="flex flex-wrap gap-3">
+        {availablePrompts.map((prompt) => (
+          <label
+            key={prompt.prompt_id_ref}
+            className="flex items-center text-white space-x-2 p-3 hover:bg-zinc-800 rounded-lg cursor-pointer transition-colors shadow-sm"
+          >
+            <input
+              type="checkbox"
+              className="form-checkbox h-5 w-5 text-blue-100 border-gray-300 rounded focus:ring-blue-500 focus:ring-offset-0"
+              checked={selectedPromptIds.includes(prompt.prompt_id_ref)}
+              onChange={() => handleCheckboxChange(prompt.prompt_id_ref)}
+            />
+            <span className="text-white select-none">
+              {prompt.prompt_description || prompt.prompt_id_ref}
+            </span>
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+export default PromptsList;
+</file>
+
+<file path="frontend/src/components/ResultDisplay.tsx">
+// src/components/ResultsDisplay.tsx
+import React, { useState } from 'react';
+import type { CorrectionResultResponse, RichSegment } from '../types/api'; // Assuming RichSegment is also in types/api.ts
+import RichSegmentDisplay from './RichSegmentDisplay'; // Assuming RichSegmentDisplay.tsx is in the same folder
+import IssueTooltip from './IssueTooltip';
+import type { TooltipPosition } from './IssueTooltip';
+
+interface ResultsDisplayProps {
+  results: CorrectionResultResponse | null;
+  promptIdsSelectedForResultDisplay: string[];
+}
+
+const ResultsDisplay: React.FC<ResultsDisplayProps> = ({ results, promptIdsSelectedForResultDisplay }) => {
+  const [activeSegmentForTooltip, setActiveSegmentForTooltip] = useState<RichSegment | null>(null);
+  const [tooltipPosition, setTooltipPosition] = useState<TooltipPosition | null>(null);
+
+
+  if (!results) {
+    return (
+      <div className="p-4 bg-gray-100 rounded text-gray-500">
+        [Correction results will appear here once processed and fetched]
+      </div>
+    );
+  }
+
+  const handleSegmentClick = (segment: RichSegment, event: React.MouseEvent<HTMLSpanElement>) => {
+    const hasIssuesSelectedForDisplay = segment.issues && segment.issues.length > 0 && segment.issues.some(issue => promptIdsSelectedForResultDisplay.includes(issue.prompt_id_ref));
+
+    if (hasIssuesSelectedForDisplay) {
+        if (segment.start_char === activeSegmentForTooltip?.start_char) {
+        setActiveSegmentForTooltip(null);
+        setTooltipPosition(null);
+        } else {
+        setActiveSegmentForTooltip(segment);
+        setTooltipPosition({
+            top: event.clientY,
+            left: event.clientX,
+        });
+        console.log('Tooltip position:', tooltipPosition)
+        }
+   } else {
+    setActiveSegmentForTooltip(null);
+    setTooltipPosition(null);
+   }
+  };
+
+  const handleCloseTooltip = () => {
+    setActiveSegmentForTooltip(null);
+    setTooltipPosition(null);
+  }
+
+  return (
+    <div className="p-4 rounded-md bg-zinc-900 leading-relaxed">
+        <h2 className="text-lg font-semibold text-white mb-6">Text with corrections:</h2>
+        {results.rich_segments && results.rich_segments.length > 0 ? (
+          <div className="p-4 rounded-md leading-relaxed whitespace-pre-line">
+            {results.rich_segments.map((segment) => (
+              <RichSegmentDisplay
+                key={segment.start_char} // Assuming start_char is unique for keys
+                segment={segment}
+                onSegmentClick={handleSegmentClick}
+                isActive={activeSegmentForTooltip?.start_char === segment.start_char}
+                promptIdsSelectedForResultDisplay={promptIdsSelectedForResultDisplay}
+              />
+            ))}
+          </div>
+        ) : (
+          <p className="text-gray-500">
+            {results.rich_segments === null
+              ? "[Rich segments data is null]"
+              : "[No rich segments to display or segments array is empty]"
+            }
+          </p>
+        )}
+        <IssueTooltip
+        segmentWithIssues={activeSegmentForTooltip}
+        position={tooltipPosition}
+        onClose={handleCloseTooltip}
+        promptIdsSelectedForResultDisplay={promptIdsSelectedForResultDisplay}
+        />
+      </div>
+  );
+};
+
+export default ResultsDisplay;
+</file>
+
+<file path="frontend/src/components/RichSegmentDisplay.tsx">
+import React, { useMemo } from "react";
+import type { RichSegment } from "../types/api";
+
+interface RichSegmentDisplayProps {
+    segment: RichSegment;
+    onSegmentClick: (segment: RichSegment, event: React.MouseEvent<HTMLSpanElement>) => void;
+    promptIdsSelectedForResultDisplay: string[];
+    isActive: boolean;
+}
+
+
+// Inside RichSegmentDisplay.jsx (simplified)
+const RichSegmentDisplay = ({ segment, onSegmentClick, isActive , promptIdsSelectedForResultDisplay}: RichSegmentDisplayProps) => {
+    const hasVisibleIssues = useMemo(() => {
+        if (!segment.issues || segment.issues.length === 0) {
+          return false;
+        }
+        if (promptIdsSelectedForResultDisplay.length === 0 && segment.issues.length > 0) {
+            return false;
+        }
+        return segment.issues.some(issue => promptIdsSelectedForResultDisplay.includes(issue.prompt_id_ref));
+      }, [segment.issues, promptIdsSelectedForResultDisplay]);
+  
+    const handleClick = (event: React.MouseEvent<HTMLSpanElement>) => {
+        if (hasVisibleIssues) {
+          onSegmentClick(segment, event);
+        }
+    };
+
+  
+    return (
+        <span
+        onClick={handleClick}
+        // Apply cursor-pointer only if there are visible issues to interact with
+        className={`rounded transition-colors duration-150 ${
+          hasVisibleIssues ? 'underline decoration-red-500 decoration-wavy cursor-pointer' : ''
+        } ${
+          isActive
+            ? 'bg-sky-100 dark:bg-sky-700'
+            : hasVisibleIssues
+            ? 'hover:bg-red-100 dark:hover:bg-red-800' // Hover for segments with visible issues
+            : 'hover:bg-gray-100 dark:hover:bg-slate-700' // Default hover
+        }`}
+      >
+        {segment.text}
+      </span>
+    );
+  };
+
+export default RichSegmentDisplay;
+</file>
+
+<file path="frontend/src/services/correctionService.ts">
+// src/services/apiService.ts
+import axios from 'axios';
+import type { PromptList, CorrectionCreateRequest, CorrectionCreateResponse, CorrectionStatusResponse, CorrectionResultResponse } from '../types/api'; // Make sure this path is correct
+
+
+const API_BASE_URL = 'http://127.0.0.1:8000/api/v1';
+
+export const fetchPrompts = async (): Promise<PromptList> => {
+  try {
+    console.log(`Fetching prompts from ${API_BASE_URL}/prompts`);
+    const response = await axios.get<PromptList>(`${API_BASE_URL}/prompts`);
+    console.log(response.data);
+    return response.data;
+  } catch (error) {
+    console.error("Error fetching prompts:", error);
+    // You might want to throw the error or return a default/empty list
+    // For now, let's re-throw to be handled by the calling component
+    throw error;
+  }
+};
+
+export const submitCorrection = async (textContent: string, promptIdRefs: string[]): Promise<CorrectionCreateResponse> => {
+    try {
+
+      const requestBody: CorrectionCreateRequest = {
+        text_content: textContent,
+        prompt_id_refs: promptIdRefs,
+      };
+      const response = await axios.post<CorrectionCreateResponse>(
+        `${API_BASE_URL}/corrections`,
+        requestBody
+      );
+      return response.data;
+    } catch (error) {
+      console.error("Error submitting correction:", error);
+      // You might want more specific error handling or reformatting here
+      throw error; // Re-throw to be handled by the calling component
+    }
+  };
+
+
+  export const getCorrectionStatus = async (correctionId: number): Promise<CorrectionStatusResponse> => {
+    try {
+      const response = await axios.get<CorrectionStatusResponse>(
+        `${API_BASE_URL}/corrections/${correctionId}/status`
+      );
+      return response.data;
+    } catch (error) {
+      console.error(`Error fetching status for correction ID ${correctionId}:`, error);
+      throw error; 
+    }
+  };
+
+
+  // New function to get the full correction results
+export const getCorrectionResult = async (
+    correctionId: number
+  ): Promise<CorrectionResultResponse> => {
+    try {
+      const response = await axios.get<CorrectionResultResponse>(
+        `${API_BASE_URL}/corrections/${correctionId}/results`
+      );
+      return response.data;
+    } catch (error) {
+      console.error(`Error fetching results for correction ID ${correctionId}:`, error);
+      throw error; // Re-throw to be handled by the calling component
+    }
+  };
+  
+
+// We will add more API functions here later (submitCorrection, getCorrectionStatus, etc.)
+</file>
+
+<file path="frontend/src/types/api.ts">
+// src/types/api.ts
+export interface Prompt {
+    prompt_id_ref: string;
+    prompt_description?: string;
+  }
+  
+  export interface PromptList {
+    prompts: Prompt[];
+  }
+  
+  export interface CorrectionCreateRequest {
+    text_content: string;
+    prompt_id_refs: string[];
+  }
+  
+  export interface CorrectionCreateResponse {
+    correction_id: number;
+  }
+  
+  export interface CorrectionStatusResponse {
+    correction_id: number;
+    status: string;
+    progress: number; // Assuming float is 0.0 to 1.0
+  }
+  
+  export interface RichSegmentIssue {
+    prompt_id_ref: string;
+    issue: string;
+    revision: string;
+  }
+  
+  export interface RichSegment {
+    text: string;
+    start_char: number;
+    end_char: number;
+    issues: RichSegmentIssue[];
+  }
+  
+  export interface CorrectionResultResponse {
+    correction_id: number;
+    original_text: string;
+    status: string;
+    rich_segments?: RichSegment[];
+  }
+</file>
+
+<file path="frontend/src/App.tsx">
+import { useEffect, useState } from 'react'
+import PromptsList from './components/PromptList'
+import { getCorrectionStatus, submitCorrection, getCorrectionResult, fetchPrompts} from './services/correctionService'
+import type { CorrectionCreateResponse, CorrectionStatusResponse, CorrectionResultResponse, Prompt } from './types/api'
+import ProgressBar from './components/ProgressBar';
+import ResultsDisplay from './components/ResultDisplay';
+
+
+const fetchTextFileContent = async (): Promise<string> => {
+  const response = await fetch('/text.txt'); 
+  if (!response.ok) {
+    throw new Error(`Failed to fetch text.txt: ${response.statusText}`);
+  }
+  const textContent = await response.text();
+  return textContent;
+};
+
+const POLLING_TERMINAL_STATUSES = ['completed', 'failed', 'error'];
+const SUCCESS_TERMINAL_STATUSES = ['completed'];
+
+function App() {
+  const [availablePrompts, setAvailablePrompts] = useState<Prompt[]>([]);
+
+
+  const [promptIdsSelectedForCorrection, setPromptIdsSelectedForCorrection] = useState<string[]>([]);
+  const [promptIdsSelectedForResultDisplay, setPromptIdsSelectedForResultDisplay] = useState<string[]>([]);
+  
+  const [correctionId, setCorrectionId] = useState<number | null>(null);
+  const [isHandlingRunCorrection, setIsHandlingRunCorrection] = useState<boolean>(false); 
+  const [currentCorrectionStatus, setCurrentCorrectionStatus] = useState<string | null>(null);
+  const [currentCorrectionProgress, setCurrentCorrectionProgress] = useState<number>(0);
+  const [correctionResults, setCorrectionResults] = useState<CorrectionResultResponse | null>(null);
+  const [isLoadingCorrectionResults, setIsLoadingCorrectionResults] = useState<boolean>(false);
+
+
+  //
+  useEffect(() => {
+    const loadPrompts = async () => {
+      try {
+        const promptData = await fetchPrompts();
+        setAvailablePrompts(promptData.prompts);
+      } catch (err) {
+        console.error(err);
+      }
+    };
+    loadPrompts();
+  }, []);
+
+
+
+  const handlePromptIdsSelectedForCorrectionChange = (newSelectedPromptIds: string[]) => {
+    setPromptIdsSelectedForCorrection(newSelectedPromptIds);
+    setCorrectionId(null);
+    setCurrentCorrectionStatus(null);
+    setCurrentCorrectionProgress(0);
+  };
+
+  const handlePromptIdsSelectedForResultDisplayChange = (newSelectedPromptIds: string[]) => {
+    setPromptIdsSelectedForResultDisplay(newSelectedPromptIds);
+  };
+
+  const handleRunCorrection = async () => {
+    if (promptIdsSelectedForCorrection.length === 0) {
+      alert("Please select at least one prompt.");
+      return;
+    }
+
+    setIsHandlingRunCorrection(true);
+    setCorrectionId(null);
+    setCurrentCorrectionStatus("submitting");
+    setCurrentCorrectionProgress(0);
+    setCorrectionResults(null);
+
+    try {
+      const currentTextContent = await fetchTextFileContent();
+      console.log("Running correction with freshly fetched text:");
+      console.log("Text from text.txt:", currentTextContent);
+      console.log("Selected Prompt IDs:", promptIdsSelectedForCorrection);
+
+      const correction: CorrectionCreateResponse = await submitCorrection(currentTextContent, promptIdsSelectedForCorrection);
+
+      setCorrectionId(correction.correction_id);
+      setCurrentCorrectionStatus("submitted");
+      console.log("Text submitted for correction. Correction ID:", correction.correction_id);
+
+    } catch (error) {
+      console.error("Error fetching text file content:", error);
+      alert("Failed to fetch text file content. Please try again.");
+      setCorrectionId(null);
+      setCurrentCorrectionStatus(null);
+      setCurrentCorrectionProgress(0);
+    } finally {
+      setIsHandlingRunCorrection(false);
+    }
+  };
+
+  useEffect(() => {
+    if (correctionId === null || currentCorrectionStatus === null) {
+      return; 
+    }
+    if (SUCCESS_TERMINAL_STATUSES.includes(currentCorrectionStatus) && !correctionResults && !isLoadingCorrectionResults) {
+      
+      const fetchResults = async () => {
+        console.log(`Fetching results for correction ID: ${correctionId}`);
+        setIsLoadingCorrectionResults(true);
+        try {
+          const results: CorrectionResultResponse = await getCorrectionResult(correctionId);
+          setCorrectionResults(results);
+          setPromptIdsSelectedForResultDisplay(promptIdsSelectedForCorrection);
+          console.log(`Results fetched for correction ID: ${correctionId}`);
+        } catch (error) {
+          console.error(`Error fetching results for correction ID ${correctionId}:`, error);
+        } finally {
+          setIsLoadingCorrectionResults(false);
+        }
+      };
+
+      fetchResults();
+    }
+  
+    if (!POLLING_TERMINAL_STATUSES.includes(currentCorrectionStatus)) {
+      const intervalId = setInterval(async () => {
+        console.log(`Polling for status of correction ID: ${correctionId}, current status: ${currentCorrectionProgress}`);
+        try {
+          const statusResponse: CorrectionStatusResponse = await getCorrectionStatus(correctionId);
+          setCurrentCorrectionStatus(statusResponse.status);
+          setCurrentCorrectionProgress(statusResponse.progress);
+
+          if (POLLING_TERMINAL_STATUSES.includes(statusResponse.status.toLowerCase())) {
+            console.log(`Reached terminal status: ${statusResponse.status}. Stopping polling.`);
+            clearInterval(intervalId); 
+            // Optionally: trigger fetching results here if status is 'completed' or 'succeeded'
+          }
+        } catch (error) {
+          console.error(`Error polling for status (ID: ${correctionId}):`, error);
+          setCurrentCorrectionStatus('polling_error');
+          clearInterval(intervalId); 
+        }
+      }, 3000); // Poll every 3 seconds
+
+      return () => clearInterval(intervalId);
+    }
+
+  }, [correctionId, currentCorrectionStatus, correctionResults, isLoadingCorrectionResults]);
+
+  return (
+    <>
+      <div className="min-h-screen bg-zinc-900 flex flex-col items-center justify-center p-4 text-white">
+      <header className="mb-8">
+        <h1 className="text-4xl font-bold text-center text-blue-600">Writing Editor</h1>
+      </header>
+      <div className="max-w-4xl mx-auto">
+      {/* Prompts section */}
+      <section id="prompts-section" className="mb-6 p-4 border rounded-lg shadow-sm">
+        <PromptsList 
+          availablePrompts={availablePrompts}
+          selectedPromptIds={promptIdsSelectedForCorrection} 
+          onSelectedPromptIdsChange={handlePromptIdsSelectedForCorrectionChange} 
+          listTitle="Select correction prompts"
+        />
+      </section>
+
+      {/* Run Button Section */}
+      <section id="run-section" className="mb-6 text-center">
+        <button
+          onClick={handleRunCorrection}
+          className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-lg text-lg shadow active:bg-blue-800 transition duration-150 ease-in-out disabled:bg-zinc-800 disabled:cursor-not-allowed"
+          disabled={promptIdsSelectedForCorrection.length === 0 || isHandlingRunCorrection}
+        >
+          {isHandlingRunCorrection ? "Running..." : "Run Correction"}
+        </button>
+      </section>
+
+     {/* Progress Section - Updated to use ProgressBar component */}
+     <section id="progress-section" className="mb-6 p-4 border rounded-lg shadow-sm">
+        {correctionId !== null ? (
+          <div>
+            <p className="text-sm text-gray-700 mb-2 text-center">
+              Job ID: <span className="font-medium">{correctionId}</span>
+            </p>
+            <ProgressBar progress={currentCorrectionProgress} statusText={currentCorrectionStatus || undefined} />
+            {isLoadingCorrectionResults && <p className="text-sm text-blue-500 text-center mt-2">Loading results...</p>}
+          </div>
+        ) : (
+          <div className="p-4 bg-gray-100 rounded text-gray-500">
+            [Submit a job to see progress]
+          </div>
+        )}
+      </section>
+
+    {/* Results Section */}
+    <section id="results-section" className="p-4 border rounded-lg shadow-sm">
+        <ResultsDisplay results={correctionResults} promptIdsSelectedForResultDisplay={promptIdsSelectedForResultDisplay} />
+      </section>
+
+      {/* +++ New section for the filter PromptList +++ */}
+      <section id="filter-prompts-section" className="mt-8 p-4 border rounded-lg shadow-sm">
+        {availablePrompts.length > 0 && (
+          <PromptsList
+            availablePrompts={availablePrompts}
+            selectedPromptIds={promptIdsSelectedForResultDisplay}
+            onSelectedPromptIdsChange={handlePromptIdsSelectedForResultDisplayChange}
+            listTitle="Show corrections from"
+          />
+        )}
+      </section>
+      </div>
+      </div>
+    </>
+  )
+}
+
+export default App
+</file>
+
+<file path="frontend/src/index.css">
+@import "tailwindcss";
+</file>
+
+<file path="frontend/src/main.tsx">
+import { StrictMode } from 'react'
+import { createRoot } from 'react-dom/client'
+import './index.css'
+import App from './App.tsx'
+
+createRoot(document.getElementById('root')!).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+)
+</file>
+
+<file path="frontend/src/vite-env.d.ts">
+/// <reference types="vite/client" />
+</file>
+
+<file path="frontend/.gitignore">
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+</file>
+
+<file path="frontend/eslint.config.js">
+import js from '@eslint/js'
+import globals from 'globals'
+import reactHooks from 'eslint-plugin-react-hooks'
+import reactRefresh from 'eslint-plugin-react-refresh'
+import tseslint from 'typescript-eslint'
+
+export default tseslint.config(
+  { ignores: ['dist'] },
+  {
+    extends: [js.configs.recommended, ...tseslint.configs.recommended],
+    files: ['**/*.{ts,tsx}'],
+    languageOptions: {
+      ecmaVersion: 2020,
+      globals: globals.browser,
+    },
+    plugins: {
+      'react-hooks': reactHooks,
+      'react-refresh': reactRefresh,
+    },
+    rules: {
+      ...reactHooks.configs.recommended.rules,
+      'react-refresh/only-export-components': [
+        'warn',
+        { allowConstantExport: true },
+      ],
+    },
+  },
+)
+</file>
+
+<file path="frontend/index.html">
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vite + React + TS</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+</file>
+
+<file path="frontend/package.json">
+{
+  "name": "frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.1.8",
+    "axios": "^1.9.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-icons": "^5.5.0",
+    "tailwindcss": "^4.1.8"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.25.0",
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
+    "@vitejs/plugin-react": "^4.4.1",
+    "eslint": "^9.25.0",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.19",
+    "globals": "^16.0.0",
+    "typescript": "~5.8.3",
+    "typescript-eslint": "^8.30.1",
+    "vite": "^6.3.5"
+  }
+}
+</file>
+
+<file path="frontend/tailwind.config.js">
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: [
+    "./index.html",
+    "./src/**/*.{js,ts,jsx,tsx}", // This tells Tailwind to scan these files in your src folder
+  ],
+  theme: {
+    extend: {}, // You can extend Tailwind's default theme here
+  },
+  plugins: [], // You can add Tailwind plugins here
+}
+</file>
+
+<file path="frontend/tsconfig.app.json">
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true
+  },
+  "include": ["src"]
+}
+</file>
+
+<file path="frontend/tsconfig.json">
+{
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.app.json" },
+    { "path": "./tsconfig.node.json" }
+  ]
+}
+</file>
+
+<file path="frontend/tsconfig.node.json">
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
+    "target": "ES2022",
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true
+  },
+  "include": ["vite.config.ts"]
+}
+</file>
+
+<file path="frontend/vite.config.ts">
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
+
+// https://vite.dev/config/
+export default defineConfig({
+  plugins: [react(), tailwindcss()],
+})
+</file>
+
+<file path=".env.example">
+POSTGRES_HOST=postgres
+POSTGRES_PORT=5432
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=postgres
+POSTGRES_DB=editor_db
+GOOGLE_API_KEY=YOUR_API_KEY
+COMPOSE_PROJECT_NAME=editor_project
+</file>
+
+<file path="Dockerfile.backend">
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN pip install -U pip setuptools wheel
+
+COPY backend/requirements.txt ./
+
+RUN pip install -r requirements.txt
+
+COPY backend/ .
+
+EXPOSE 8000
+
+RUN mkdir -p /var/lib/app
+COPY backend/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["sh","-c","exec uvicorn main:app --host 0.0.0.0 --port 8000 --reload"]
+</file>
+
+<file path="backend/database_setup/prompts/mc_closkey.yml">
+- prompt_id_ref: flag_unclear_parts
+  chapter: 4
+  description: "Check for unclear parts of the text"
+  input_granularity: "whole_text"
+  prompt: |
+    ROLE:
+    You are an expert editor for scientific writing reviewing a text by a scientist. 
+
+    TASK:
+    Analyze the provided TEXT to identify areas that could hinder an average reader's immediate comprehension or disrupt their reading flow. For each identified issue, you will flag it and suggest a constructive solution or explain the problem to guide the author's revision.
+
+    INSTRUCTIONS:
+
+    1. Read the provided TEXT carefully.
+    2. Identify and flag any sections, sentences, or phrases that exhibit the following issues:
+      - Ambiguity: Could be interpreted in multiple ways, making the intended meaning unclear.
+      - Puzzles: Requires the reader to pause significantly to decipher the meaning or connection of ideas.
+      - Irrelevant Detours: Contains information that distracts from the core message of the sentence or paragraph.
+      - Abrupt Shifts: Involves sudden changes in topic, terminology, or complexity that could disorient the reader.
+      - "One-More-Thing Effect": Shows evidence of additional thoughts awkwardly inserted, disrupting the natural flow.
+    3. For each flagged issue:
+      - Report the snippet of the TEXT in which the issue is found. Keep this snippet short, but make sure that it is long enough to uniquely identify the issue in the given TEXT. 
+      - Provide a concise explanation of the identified issue.
+      - Suggest a revision to enhance clarity. 
+    4. Output your results in the JSON format specified under OUTPUT.
+    
+    OUTPUT:
+    Output your results strictly in the following JSON format. Avoid any preceeding or trailing text.
+    {
+      "issues": [
+        {
+          "snippet": "The original problematic TEXT snippet allowing to uniquely identify the issue in the given TEXT",
+          "issue": "The identified issue",
+          "revision": "The suggested revision"
+        }
+        // Other issues go here
+      ]
+    }
+
+    TEXT:
+    {{ input_text }}
+  
+- prompt_id_ref: keep_target_reader_in_mind
+  chapter: 11
+  description: "Keep a target reader in mind"
+  input_granularity: "whole_text"
+  prompt: |
+    ROLE: 
+    You are an expert editor for scientific writing reviewing a text by a scientist.
+
+    TASK: 
+    Analyze the provided TEXT to ensure that the style is consistent with the target reader.
+
+    INSTRUCTION:
+    1. Read the description of the TARGET READER carefully.
+    2. Identify and flag any sections, sentences, or phrases in the TEXT whose language, tone or style deviates from those appropriate for the target reader.
+    3. For each flagged issue:
+      - Report the snippet of the TEXT in which the issue is found. Keep this snippet short, but make sure that it is long enough to uniquely identify the issue in the given TEXT. 
+      - Provide a concise explanation of the identified issue.
+      - Suggest a revision to better match the target reader.
+    4. Output your results in the JSON format specified under OUTPUT.
+    
+    OUTPUT:
+    Output your results strictly in the following JSON format. Avoid any preceeding or trailing text.
+    {
+      "issues": [
+        {
+          "snippet": "The original problematic TEXT snippet allowing to uniquely identify the issue in the given TEXT",
+          "issue": "The identified issue",
+          "revision": "The suggested revision"
+        }
+        // Other issues go here
+      ]
+    }
+
+    TARGET READER:
+    A scientist with a PhD in the field of Computational Social Science.
+
+    TEXT:
+    {{ input_text }}
+
+- prompt_id_ref: check_for_boilerplate
+  chapter: 12
+  description: "Check for boilerplate"
+  input_granularity: "paragraph"
+  prompt: |
+    ROLE
+    You are an expert editor for scientific writing reviewing a text by a scientist.
+
+    TASK
+    Review the provided TEXT. Pinpoint and flag instances of:
+    1. Boilerplate (prefabricated, predictable, or unnecessary content).
+    2. Excessive Repetition.
+    3. Excessive Introductions, Summarizing, or Anticipation.
+    
+    INSTRUCTIONS:
+    1. Read the provided TEXT carefully.
+    2. Identify and flag any sentences that exhibit the following issues:
+      a. Boilerplate: Identify prose that is "prefabricated and predictable" or adds little value. Specifically check for:
+        - Irrelevant Background: "Padding" or material "beside the point" that doesn't contribute to the core argument.
+        - Redundant Case Explanations: Applying an explanation across many cases when "a single well-chosen one" is sufficient.
+        - Over-explaining Common Knowledge: Explaining what an educated reader likely already knows (e.g., basic unit conversions).
+        - Unapplied "Theoretical Chatter": Repeating theories "copied out of a textbook" without direct application to the current subject.
+      b. Excessive Repetition: Locate ideas, phrases, or arguments repeated without adding new insight or value. Flag unacknowledged repetitions that make the text feel stagnant.
+      c. Excessive Introductions, Summarizing, or Anticipation: Identify "excessive introduction and summarizing and anticipation." This includes:
+        - Overly detailed overtures or section introductions.
+        - Elaborate summaries of what has just been said or lengthy previews of what will be said (e.g., "As we shall see," or table-of-contents paragraphs like "The outline of this paper is as follows").
+        - Prose cluttered with "traffic directions" rather than relying on clear structure.
+    3. For each flagged issue:
+      - Report the snippet of the TEXT in which the issue is found. Keep this snippet short, but make sure that it is long enough to uniquely identify the issue in the given TEXT. 
+      - Provide a concise explanation of the identified issue.
+      - Suggest a revision that solves the issue. 
+    4. Output your results in the JSON format specified under OUTPUT.
+
+    OUTPUT:
+    Output your results strictly in the following JSON format. Avoid any preceeding or trailing text.
+    {
+      "issues": [
+        {
+          "snippet": "The original problematic TEXT snippet allowing to uniquely identify the issue in the given TEXT",
+          "issue": "The identified issue",
+          "revision": "The suggested revision"
+        }
+        // Other issues go here
+      ]
+    }
+
+    TEXT:
+    {{ input_text }}
+
+
+- prompt_id_ref: paragraph_should_have_one_topic
+  chapter: 13
+  description: "Check that paragraphs have one topic"
+  input_granularity: "paragraph"
+  prompt: |
+    ROLE:
+    You are an expert editor for scientific writing reviewing a text by a scientist.
+
+    TASK:
+    Analyze the provided PARAGRAPH. Identify whether it violates the key writing principles listed below. For each identified error, suggest a concrete correction.
+
+    INSTRUCTIONS
+    Evaluate each paragraph based on the following principles:
+    1. Read the provided PARAGRAPH carefully.
+    2. Identify and flag if the paragraph significantly violates the key writing principles listed below.
+      1.  **Clear Topic Sentence & Transition:** The paragraph must start with a clear topic sentence that introduces its specific subject. 
+      2.  **Single Topic Focus:** The paragraph should be "a more or less complete discussion of one topic" introduced by the topic sentence.
+      3.  **Provides New Value:** Each paragraph must "tell the reader something she doesn’t know or doesn’t at present believe," such as a "surprising detail" or "fresh short quotation."
+      4.  **Clear Concluding Sentence:** The paragraph should end with "a simple, street-talk encapsulation or punctuation of what you’ve been saying, a sentence Mom could understand instantly."
+      5.  **Avoids Excessive Length:** Paragraphs should not be so long that they "exhaust the reader."
+      6.  **Avoids Excessive Brevity:** Paragraphs, especially single-sentence ones, should not be so short as to "give a breathless quality" or seem like a "cheap trick."
+    3. For each principle that is violated, report:
+      - The first sentence of the PARAGRAPH (I use it to identify the paragraph in the original text)
+      - A concise explanation of the identified issue.
+      - A suggested revision to fix the issue.
+    4. Output your results in the JSON format specified under OUTPUT.
+
+    OUTPUT:
+    Output your results strictly in the following JSON format. Avoid any preceeding or trailing text.
+    {
+      "issues": [
+        {
+          "snippet": "The entire first sentence of the PARAGRAPH (I use it to identify the paragraph in the original text)",
+          "issue": "A concise explanation of the identified issue",
+          "revision": "A suggested revision to fix the issue"
+        }
+        // Other issues go here
+      ]
+    }
+
+    PARAGRAPH:
+    {{ input_text }}
+
+
+- prompt_id_ref: sentence_linking_with_graceful_repetition
+  chapter: 17
+  description: "Check that sentence linking is achieved via graceful repetition"
+  input_granularity: "paragraph"
+  prompt: |
+    ROLE:
+    You are an expert editor for scientific writing reviewing a text by a scientist.
+
+    TASK:
+    Analyze the provided TEXT to identify passages where the writing does not cohere or "hang together" effectively due to poor linking between sentences or ideas. For each identified issue, explain the problem and suggest a specific improvement based on established principles of good writing coherence.
+
+    INSTRUCTIONS:
+    1. Read the provided TEXT carefully.
+    2. Identify and flag any sections that exhibit poor linking between sentences or ideas. Keep in mind the following principles:
+        - Good Linking is achieved by:
+            - Graceful Repetition: Repeating key words or concepts to create clear connections between sentences.
+            - Pronouns and Word Variations: Using pronouns to refer to previously mentioned subjects and employ different forms of a root word (polyptoton) to link ideas subtly.
+        - Bad Linking is achieved by:
+            - Overuse of Explicit Linking Words: Avoid excessive use of introductory linking words or phrases (e.g., "indeed," "however," "therefore," "furthermore," "to be sure," "on the other hand"). While sometimes necessary, their overuse can make writing clunky.
+            - "Clanking Machinery": Steer clear of awkward or formulaic constructions like "not only... but also," which can make writing seem amateurish.
+            - Irrelevancies or Logical Gaps: Lack of logical follow-up between sentences. 
+
+    3. For each identified issue:
+      - Report the snippet of the TEXT in which the issue is found. Keep this snippet short, but make sure that it is long enough to uniquely identify the issue in the given TEXT. 
+      - Provide a concise explanation of the identified issue.
+      - Suggest a revision to improve the linking.
+    4. Output your results in the JSON format specified under OUTPUT.
+
+    OUTPUT:
+    Output your results strictly in the following JSON format. Avoid any preceeding or trailing text.
+    {
+      "issues": [
+        {
+          "snippet": "The original problematic TEXT snippet allowing to uniquely identify the issue in the given TEXT",
+          "issue": "The identified issue",
+          "revision": "The suggested revision"
+        }
+        // Other issues go here
+      ]
+    }
+    
+    TEXT:
+    {{ input_text }}
+
+
+- prompt_id_ref: vary_sentence_length_and_structure
+  chapter: 18
+  description: "Check that sentence length and structure vary for rhythm"
+  input_granularity: "paragraph"
+  prompt: |
+    ROLE:
+    You are an expert editor for scientific writing reviewing a text by a scientist.
+
+    TASK:
+    Analyze the provided TEXT to identify sections where the writing does not have a good rhythm. Then, suggest amendments to improve the rhythm.
+
+    INSTRUCTIONS:
+    1. Read the provided TEXT carefully.
+    2. Identify and flag any sections that exhibit the following issues:
+        - Montonoy: Check for monotony caused by sentences of similar length and structure. Repetition is only acceptable for deliberate dramatic effect. This montony can be improved by either varying the sentence length and construction or the content distribution in sentence parts, e.g. changing how much elaboration is given to the subject, verb, and object across different sentences.
+        - Excessive elaboration: Each sentence should primarily elaborate on only *one* of its three main parts (subject, verb, or object) to avoid being overburdened.
+    3. For each identified issue:
+      - Report the snippet of the TEXT in which the issue is found. Keep this snippet short, but make sure that it is long enough to uniquely identify the issue in the given TEXT. 
+      - Provide a concise explanation of the identified issue.
+      - Suggest a revision to improve the rhythm.
+    4. Output your results in the JSON format specified under OUTPUT.
+
+    OUTPUT:
+    Output your results strictly in the following JSON format. Avoid any preceeding or trailing text.
+    {
+      "issues": [
+        {
+          "snippet": "The original problematic TEXT snippet allowing to uniquely identify the issue in the given TEXT",
+          "issue": "The identified issue",
+          "revision": "The suggested revision"
+        }
+        // Other issues go here
+      ]
+    }
+
+    TEXT:
+    {{ input_text }}
+    
+
+- prompt_id_ref: check_for_elegant_variation
+  chapter: 19
+  description: "Check for elegant variation"
+  input_granularity: "whole_text"
+  prompt: |
+    ROLE
+    You are an expert editor for scientific writing reviewing a text by a scientist.
+
+    TASK
+    Review the input TEXT to identify any instance of "elegant variation" and "pointless repetition", then suggest amendments to improve the writing.
+
+    INSTRUCTIONS
+    1. Read the provided TEXT carefully.
+    2. Identify and flag any sections, sentences, or phrases that exhibit the following issues:
+      a. Elegant Variation: Using multiple different words or phrases for the same concept. This confuses the reader and thus should be avoided as much as possible. Improve by using consistent terminology for the same idea making it easier for the reader to follow. 
+      b. Pointless Repetition:
+        - Using the same word/phrase for different meanings in close proximity. Improve by choosing distinct words for distinct meanings. 
+        - Repeating a word/phrase where it adds no clarity, grace, or meaningful connection. Improve by removing or rephrasing.
+    3. For each problematic segment found:
+        - Report the snippet of the TEXT in which the issue is found. Keep this snippet short, but make sure that it is long enough to uniquely identify the issue in the given TEXT. 
+        - Provide a concise explanation of the identified issue.
+        - Suggest a revision to improve the writing.
+    4. Output your results in the JSON format specified under OUTPUT.
+
+    OUTPUT
+    Output your results strictly in the following JSON format. Avoid any preceeding or trailing text.
+    {
+      "issues": [
+        {
+          "snippet": "The original problematic TEXT snippet allowing to uniquely identify the issue in the given TEXT",
+          "issue": "The identified issue",
+          "revision": "The suggested revision"
+        }
+        // Other issues go here
+      ]
+    }
+    
+    TEXT:
+    {{ input_text }}
+
+
+- prompt_id_ref: check_modifiers
+  chapter: 21
+  description: "Check that modifiers are necessary and placed correctly"
+  input_granularity: "paragraph"
+  prompt: |
+    ROLE:
+    You are an expert editor for scientific writing reviewing a text by a scientist.
+
+    TASK:
+    Analyze all modifiers within the provided TEXT. Your goal is to ensure each modifier is both genuinely necessary for meaning and correctly placed for clarity and flow. 
+
+    INSTRUCTIONS:
+    1.  Carefully read the input TEXT.
+    2.  For each sentence, identify all potential modifiers (e.g., adjectives, adverbs, participial phrases, clauses).
+    3.  For each identified modifier, perform the following sequential evaluation:
+        - A. Step 1: Necessity Assessment
+            - Evaluate: Is this modifier genuinely essential for meaning, clarity, precision, or a specific intended emphasis?
+            - Apply a **strict standard** for necessity. Pay close attention to:
+                - Common intensifiers (e.g., 'very', 'really', 'actually', 'extremely', 'truly', 'quite').
+                - General descriptive adjectives and adverbs.
+            - Determine if the modifier does not contribute significant, indispensable information, it should be considered "Needless."
+            - If the modifier is deemed **needless**, it is problematic. Proceed to Instruction 4 to prepare the output.
+        - B. Step 2: Placement Assessment (Perform this step *only if* the modifier was deemed **necessary** in Step 1A)
+            - Evaluate if the necessary modifier is positioned close to the word/phrase it describes to ensure clear and natural meaning.
+            - Check specifically for:
+                - Ambiguous placement: Does the modifier's position make it unclear which element it modifies, potentially creating confusing or multiple interpretations?
+                - Awkward placement: Is the modifier positioned far from its target, making the sentence sound unnatural, clumsy, or difficult to process smoothly (even if the meaning is eventually decipherable)?
+            -  If a necessary modifier is found to be **misplaced** (either ambiguously or awkwardly), it is problematic. Proceed to Instruction 4 to prepare the output.
+    4.  If a modifier has been identified as problematic (either **"Needless"** from Step 3A or **"Misplaced"** from Step 3B), prepare the following information for output:
+        - Report the snippet of the TEXT in which the issue is found. Keep this snippet short, but make sure that it is long enough to uniquely identify the issue in the given TEXT. 
+        - Provide a concise explanation of the identified issue.
+        - Suggest a revision to improve the writing.
+    5. Output your results in the JSON format specified under OUTPUT.
+
+    OUTPUT:
+    Output your results strictly in the following JSON format. Avoid any preceeding or trailing text.
+    {
+      "issues": [
+        {
+          "snippet": "The original problematic TEXT snippet allowing to uniquely identify the issue in the given TEXT",
+          "issue": "The identified issue",
+          "revision": "The suggested revision"
+        }
+        // Other issues go here
+      ]
+    }
+
+    TEXT:
+    {{ input_text }}
+
+
+- prompt_id_ref: use_active_verbs
+  chapter: 25
+  description: "Check that active verbs are used and nominalizations are avoided"
+  input_granularity: "paragraph"
+  prompt: |
+    ROLE:
+    You are an expert editor for scientific writing reviewing a text by a scientist.
+
+    TASK:
+    Analyze the provided TEXT to identify instances of passive voice and nominalization. For each identified instance, suggest a revision that adheres to the principles of using active verbs and expressing actions directly with verbs.
+
+    INSTRUCTIONS:
+    1.  Read the input text carefully.
+    2.  Identify all sentences or phrases that:
+      - Are written in the passive voice.
+      - Are instances of nominalization, where an action is expressed as a noun rather than a verb (e.g., "there is a requirement for analysis" instead of "it requires analysis" or "we need to analyze").
+    3. For each identified issue:
+      - Report the snippet of the TEXT in which the issue is found. Keep this snippet short, but make sure that it is long enough to uniquely identify the issue in the given TEXT. 
+      - Provide a concise explanation of the identified issue.
+      - If the issue is a passive voice construction, provide an alternative using active voice. If the issue is a nominalization, rephrase it to use a direct and active verb to express the core action.
+    4. Output your results in the JSON format specified under OUTPUT.
+
+    OUTPUT:
+    Output your results strictly in the following JSON format. Avoid any preceeding or trailing text.
+    {
+      "issues": [
+        {
+          "snippet": "The original problematic TEXT snippet allowing to uniquely identify the issue in the given TEXT",
+          "issue": "The identified issue",
+          "revision": "The suggested revision"
+        }
+        // Other issues go here
+      ]
+    }
+    
+    TEXT:
+    {{ input_text }}
+
+- prompt_id_ref: avoid_bad_words
+  chapter: 26
+  description: "Check that bad words are avoided"
+  input_granularity: "paragraph"
+  prompt: |
+    ROLE:
+    You are an expert editor for scientific writing reviewing a text by a scientist.
+
+    TASK:
+    Analyze the provided TEXT to identify areas that violate specific writing principles related to the use of "bad" nouns, verbs, and conjunctions. Then, suggest amendments to improve the writing.
+
+    INSTRUCTIONS:
+    1. Read the input text carefully.
+    2. Identify and flag any sentences that exhibit the following issues:
+        - Vague or overly abstract nouns (e.g., "concept," "situation," "individuals," "agents"). Improve with simpler, more specific alternatives (e.g., "idea," "condition," "people").
+        - Empty nouns like "structure" or "process". Improve by rephrasing for directness or their removal if appropriate (e.g., change "the transition process" to "the transition").
+        - Pretentious and feeble verbs such as "critique," "implement," "comprise," "hypothesize," "finalize". Improve with stronger, more direct alternatives (e.g., for "critique," suggest "criticize" or "comment on"; for "comprise," suggest "include" or "consist of").
+        - Uses of "analyze" that do not allign with its core meaning ("cut to pieces"). Suggest alternatives if misused.
+        - Uses of "state" where "say" or more descriptive verbs (e.g., "assert," "argue") would be better.
+        - Uses of "due to" where "by" or "because" are more appropriate.
+        - Potentially awkward or unnecessary uses of "in terms of."
+    3. For each identified issue:
+      - Report the snippet of the TEXT in which the issue is found. Keep this snippet short, but make sure that it is long enough to uniquely identify the issue in the given TEXT. 
+      - Provide a concise explanation of the identified issue.
+      - Suggest a revision to improve the writing.
+    4. Output your results in the JSON format specified under OUTPUT.
+
+    OUTPUT:
+    Output your results strictly in the following JSON format. Avoid any preceeding or trailing text.
+    {
+      "issues": [
+        {
+          "snippet": "The original problematic TEXT snippet allowing to uniquely identify the issue in the given TEXT",
+          "issue": "The identified issue",
+          "revision": "The suggested revision"
+        }
+        // Other issues go here
+      ]
+    }
+    
+    TEXT:
+    {{ input_text }}
+
+- prompt_id_ref: be_concrete
+  chapter: 27
+  description: "Check that sentences are concrete"
+  input_granularity: "paragraph"
+  prompt: |
+    ROLE:
+    You are an expert editor for scientific writing reviewing a text by a scientist.
+
+    TASK:
+    Analyze the provided TEXT to identify sentences that lack concreteness. Then, suggest amendments to improve the writing.
+
+    INSTRUCTIONS:
+    1. Read the input text carefully.
+    2. Identify and flag any sentences that exhibit the following issues:
+        - The sentence uses abstract or vague terms when a more concrete term is available.
+        - The sentence uses plurals when singulars might be more impactful.
+        - The sentence uses generalities that could be replaced by specific examples.
+    3. For each identified issue:
+      - Report the snippet of the TEXT in which the issue is found. Keep this snippet short, but make sure that it is long enough to uniquely identify the issue in the given TEXT. 
+      - Provide a concise explanation of the identified issue.
+      - Suggest a revision to improve the concreteness of the sentence.
+    4. Output your results in the JSON format specified under OUTPUT.
+    
+    OUTPUT:
+    Output your results strictly in the following JSON format. Avoid any preceeding or trailing text.
+    {
+      "issues": [
+        {
+          "snippet": "The original problematic TEXT snippet allowing to uniquely identify the issue in the given TEXT",
+          "issue": "The identified issue",
+          "revision": "The suggested revision"
+        }
+        // Other issues go here
+      ]
+    }
+
+    TEXT:
+    {{ input_text }}
+
+- prompt_id_ref: avoid_this_that_these_those
+  chapter: 30
+  description: "Check for overuse of this, that, these, those"
+  input_granularity: "paragraph"
+  prompt: |
+    ROLE:
+    You are an expert editor for scientific writing reviewing a text by a scientist.
+
+    TASK:
+    Analyze the provided TEXT to identify instances of "this," "that," "these," and "those." Then, suggest replacements where appropriate to improve readability and reduce potential reader confusion or backtracking, particularly in cases of overuse or ambiguity.
+
+    INSTRUCTIONS:
+    1. Read the input text carefully.
+    2. Locate all occurrences of "this," "that," "these," and "those" in the provided text.
+    2. For each instance, assess if substituting it with "the," "it," "such (a)," or a repetition of the noun it refers to would improve the sentence's clarity or flow.
+    3. Focus your suggestions on areas where these demonstrative pronouns appear frequently or where their reference might not be immediately obvious.
+    5. Apply nuance: only recommend a change if it genuinely enhances the writing. If the original usage is clear and effective, or if a change would sound awkward, do not suggest an alteration.
+    6. For each identified issue:
+      - Report the snippet of the TEXT in which the issue is found. Keep this snippet short, but make sure that it is long enough to uniquely identify the issue in the given TEXT. 
+      - Provide a concise explanation of the identified issue.
+      - Suggest a revision to improve the writing.
+    7. Output your results in the JSON format specified under OUTPUT.
+
+    OUTPUT:
+    Output your results strictly in the following JSON format. Avoid any preceeding or trailing text.
+    {
+      "issues": [
+        {
+          "snippet": "The original problematic TEXT snippet allowing to uniquely identify the issue in the given TEXT",
+          "issue": "The identified issue",
+          "revision": "The suggested revision"
+        }
+        // Other issues go here
+      ]
+    }
+
+    TEXT:
+    {{ input_text }}
+</file>
+
+<file path="backend/src/api.py">
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status as http_status
+from sqlalchemy.orm import Session
+from typing import List
+
+# Assuming your modules are structured like this
+from config import LLM_MODEL_NAME
+from src.utils import get_db, logger # Your DB session dependency and logger
+from src.services.correction import CorrectionService # Your service layer
+from src.schemas.schemas_api import ( # Your Pydantic models
+    CorrectionCreateRequest, CorrectionCreateResponse,
+    CorrectionStatusResponse, CorrectionResultResponse, PromptList, Prompt
+)
+from src.models import Prompt as PromptModel
+
+router = APIRouter(
+    prefix="/api/v1", # Base prefix for this router
+    tags=["corrections"] # Tag for OpenAPI docs
+)
+
+@router.post("/corrections",
+             response_model=CorrectionCreateResponse,
+             summary="Submit text for correction and initiate processing")
+async def create_correction_submission(
+    request_data: CorrectionCreateRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db) 
+):
+    """
+    Submits a piece of text and a list of prompt IDs for correction.
+    The processing is done in the background.
+    """
+    logger.debug(f"Received correction request for {len(request_data.prompt_id_refs)} prompts.")
+    correction_service = CorrectionService(db=db, llm_model_name=LLM_MODEL_NAME)
+    correction_create_response = correction_service.create_new_correction(
+        original_text=request_data.text_content,
+        prompt_id_refs=request_data.prompt_id_refs
+    )
+    if not correction_create_response:
+        logger.error("Failed to create correction submission.")
+        raise HTTPException(status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to initiate correction process.")
+    
+    background_tasks.add_task(correction_service.run_correction, correction_id=correction_create_response.correction_id)
+    return correction_create_response
+
+
+@router.get("/corrections/{correction_id}/status",
+            response_model=CorrectionStatusResponse,
+            summary="Get the status of a correction job")
+async def get_correction_job_status(
+    correction_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Retrieves the current status and progress of a correction job.
+    """
+    logger.debug(f"Fetching status for submission_id: {correction_id}")
+    correction_service = CorrectionService(db=db, llm_model_name=LLM_MODEL_NAME)
+    status_data = correction_service.get_correction_status(correction_id=correction_id)
+    if not status_data:
+        logger.warning(f"Status requested for non-existent correction_id: {correction_id}")
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Correction ID not found.")
+    return status_data
+
+
+@router.get("/corrections/{correction_id}/results",
+            response_model=CorrectionResultResponse,
+            summary="Get the results of a completed correction job")
+async def get_correction_job_results(
+    correction_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Retrieves the processed results for a correction job, including rich text segments.
+    """
+    logger.debug(f"Fetching results for correction_id: {correction_id}")
+    correction_service = CorrectionService(db=db, llm_model_name=LLM_MODEL_NAME)
+    result_data = correction_service.get_correction_results(correction_id=correction_id)
+    if not result_data:
+        logger.warning(f"Results requested for non-existent correction_id: {correction_id}")
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Correction ID not found.")
+    return result_data
+
+@router.get("/prompts",
+            response_model=PromptList,
+            summary="List all available and enabled prompts")
+async def list_available_prompts(
+    db: Session = Depends(get_db) 
+):
+    """
+    Returns a list of all prompts that are currently enabled and can be used for corrections.
+    """
+    logger.debug("Fetching list of available prompts.")
+    prompts = db.query(PromptModel).filter(PromptModel.is_enabled == True).all()
+    return PromptList(prompts=[Prompt(prompt_id_ref=prompt.prompt_id_ref, prompt_description=prompt.description) for prompt in prompts])
+</file>
+
+<file path="backend/src/models.py">
+import enum
+from sqlalchemy import create_engine, Column, Integer, String, Text, Boolean, DateTime, ForeignKey, Enum as SAEnum, Identity
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import relationship, declarative_base
+from sqlalchemy.sql import func # For server-side default timestamps
+
+# Define a Base for declarative models
+Base = declarative_base()
+
+# Define Enums for status fields to ensure data integrity
+class InputGranularityEnum(enum.Enum):
+    WHOLE_TEXT = "whole_text"
+    PARAGRAPH = "paragraph"
+
+class CorrectionStatusEnum(enum.Enum):
+    PENDING = "pending"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+class Prompt(Base):
+    __tablename__ = "prompts"
+
+    prompt_id = Column(Integer, Identity(always=True), primary_key=True)
+    prompt_id_ref = Column(Text, nullable=False, unique=True)
+    description = Column(Text, nullable=True)
+    text = Column(Text, nullable=False)
+    input_granularity = Column(SAEnum(InputGranularityEnum), nullable=False)
+    is_enabled = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    # Relationship: A Prompt can be used in many CorrectionSteps
+    correction_steps = relationship("CorrectionStep", back_populates="prompt")
+
+    def __repr__(self):
+        return f"<Prompt(prompt_id={self.prompt_id}, name='{self.prompt_id_ref}')>"
+
+class Correction(Base):
+    __tablename__ = "corrections"
+
+    correction_id = Column(Integer, Identity(always=True), primary_key=True)
+    original_text = Column(Text, nullable=False)
+    status = Column(SAEnum(CorrectionStatusEnum), default=CorrectionStatusEnum.PENDING, nullable=False)
+
+    # Relationship: A Correction can have many CorrectionSteps
+    steps = relationship("CorrectionStep", back_populates="correction", cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"<Correction(correction_id={self.correction_id}, status='{self.status.value}')>"
+
+class CorrectionStep(Base):
+    __tablename__ = "correction_steps"
+
+    correction_step_id = Column(Integer, Identity(always=True), primary_key=True)
+    correction_id = Column(Integer, ForeignKey("corrections.correction_id"), nullable=False)
+    prompt_id = Column(Integer, ForeignKey("prompts.prompt_id"), nullable=False)
+    
+    input_text_sent_to_llm = Column(Text, nullable=False)
+    original_text_start_char = Column(Integer, nullable=False)
+    paragraph_index = Column(Integer, nullable=True) # Null if prompt is 'whole_text'
+    
+    status = Column(SAEnum(CorrectionStatusEnum), default=CorrectionStatusEnum.PENDING, nullable=False)
+    llm_response = Column(JSONB, nullable=True)
+    error_message = Column(Text, nullable=True)
+
+    # Relationships
+    correction = relationship("Correction", back_populates="steps")
+    prompt = relationship("Prompt", back_populates="correction_steps")
+    analysis_results = relationship("AnalysisResult", back_populates="correction_step", cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"<CorrectionStep(correction_step_id={self.correction_step_id}, status='{self.status.value}')>"
+
+class AnalysisResult(Base):
+    __tablename__ = "analysis_results"
+
+    analysis_result_id = Column(Integer, Identity(always=True), primary_key=True)
+    correction_step_id = Column(Integer, ForeignKey("correction_steps.correction_step_id"), nullable=False)
+    
+    snippet = Column(Text, nullable=False)
+    issue = Column(Text, nullable=False)
+    revision = Column(Text, nullable=False)
+    
+    original_text_start_char = Column(Integer, nullable=False)
+    original_text_end_char = Column(Integer, nullable=False)
+
+    # Relationship
+    correction_step = relationship("CorrectionStep", back_populates="analysis_results")
+
+    def __repr__(self):
+        return f"<AnalysisResult(analysis_result_id={self.analysis_result_id}, snippet_from_llm='{self.snippet[:30]}...')>"
+</file>
+
+<file path="backend/config.py">
+import os
+
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Get database configuration from environment variables
+DB_USER = os.getenv('POSTGRES_USER')
+DB_PASSWORD = os.getenv('POSTGRES_PASSWORD')
+DB_HOST = os.getenv('POSTGRES_HOST')
+DB_PORT = os.getenv('POSTGRES_PORT')
+DB_NAME = os.getenv('POSTGRES_DB')
+GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
+
+print(DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME, GOOGLE_API_KEY)
+
+# Construct database URL with psycopg2 adapter
+SQLALCHEMY_DATABASE_URL = f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+
+LLM_MODEL_NAME = "gemini-2.5-pro" # This is likely the best model for this task.
+# LLM_MODEL_NAME="gemini-2.5-flash-preview-05-20"
+# LLM_MODEL_NAME="gemini-1.5-flash-8b" # This is the cheapest model.
+</file>
+
+<file path="backend/requirements.txt">
+annotated-types==0.7.0
+anyio==4.9.0
+cachetools==5.5.2
+certifi==2025.6.15
+charset-normalizer==3.4.2
+click==8.2.1
+fastapi==0.115.14
+google-auth==2.40.3
+google-genai==1.23.0
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.10
+Jinja2==3.1.6
+MarkupSafe==3.0.2
+psycopg2-binary==2.9.10
+pyasn1==0.6.1
+pyasn1_modules==0.4.2
+pydantic==2.11.7
+pydantic_core==2.33.2
+python-dotenv==1.1.1
+PyYAML==6.0.2
+requests==2.32.4
+rsa==4.9.1
+sniffio==1.3.1
+SQLAlchemy==2.0.41
+starlette==0.46.2
+tenacity==8.5.0
+typing-inspection==0.4.1
+typing_extensions==4.14.0
+urllib3==2.5.0
+uvicorn==0.35.0
+websockets==15.0.1
+</file>
+
+<file path="docker-compose.yml">
+name: editor_project
+services:
+  postgres:
+    image: postgres:16
+    container_name: editor_db_postgres
+    env_file:
+      - ./.env
+    volumes:
+      - editor_db_data:/var/lib/postgresql/data
+    ports:
+      - "5471:5432" 
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  frontend:
+    image: node:20-alpine
+    container_name: editor_frontend
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+      - editor_node_modules:/app/node_modules
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    ports:
+      - "5173:5173" 
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  backend:
+    build:
+      context: . 
+      dockerfile: Dockerfile.backend 
+    container_name: editor_backend
+    env_file:
+      - ./.env
+    ports:
+      - "8000:8000" 
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  editor_db_data:
+  editor_node_modules:
+</file>
+
+<file path="backend/fastapi_test.py">
+from fastapi.testclient import TestClient
+from main import app
+import time
+
+client = TestClient(app)
+
+def load_text():
+    text_path = '/Users/andrea/Desktop/PhD/llm_editor/frontend/public/text.txt'
+    with open(text_path, 'r') as file:
+        text = file.read()
+    return text
+
+def test_list_prompts():
+    response = client.get("/api/v1/prompts")
+    print(response.json())
+    assert response.status_code == 200
+
+def test_create_correction():
+    text = load_text()
+    list_prompts = client.get("/api/v1/prompts").json()["prompts"]
+    prompt_id_refs = [prompt["prompt_id_ref"] for prompt in list_prompts[:5]]
+    response = client.post("/api/v1/corrections", json={"text_content": text, "prompt_id_refs": prompt_id_refs})
+    print(response.json())
+    assert response.status_code == 200
+
+def test_all():
+    text = load_text()
+    list_prompts = client.get("/api/v1/prompts").json()["prompts"]
+    prompt_id_refs = [prompt["prompt_id_ref"] for prompt in list_prompts[:6]]
+    response = client.post("/api/v1/corrections", json={"text_content": text, "prompt_id_refs": prompt_id_refs})
+    correction_id = response.json()["correction_id"]
+
+    while True:
+        response = client.get(f"/api/v1/corrections/{correction_id}/status")
+        print(response.json())
+        if response.json()["status"] == "completed":
+            break
+        time.sleep(1)
+
+    response = client.get(f"/api/v1/corrections/{correction_id}/results")
+    print(response.json())
+    assert response.status_code == 200
+
+
+
+if __name__ == "__main__":
+    test_all()
+</file>
+
+<file path=".gitignore">
+**/__pycache__/*
+frontend/node_modules/*
+**/.DS_Store
+**/.venv/*
+.env
+</file>
+
+<file path="backend/database_setup/prompts/mia.yml">
+- prompt_id_ref: copy_editor_corrections
+  description: "Check punctuation, grammar, and spelling errors."
+  input_granularity: paragraph
+  prompt: |
+    ## ROLE:
+    You are an expert copy editor for scientific writing, tasked with reviewing a a paper in urban science (from a complexity/computational social science perspective).
+
+    ## TASK:
+    Analyze the provided TEXT to identify and correct all objective errors. Your goal is to ensure the text is grammatically perfect and free of spelling and punctuation mistakes.
+
+    ## INSTRUCTIONS:
+    1.  Carefully read the provided TEXT.
+    2.  Identify any sections, sentences, or phrases that exhibit the following issues:
+        * Grammar errors (e.g., subject-verb agreement, tense, word order).
+        * Spelling errors.
+        * Punctuation errors.
+    3.  For each identified issue, create a JSON object. The final output should be a single JSON object containing a list named "issues".
+    4.  Each object in the list must contain the following keys:
+        * `snippet`: The exact part of the TEXT with the issue. Keep it as short as possible.
+        * `sentence_context`: The full sentence containing the snippet.
+        * `issue`: A concise explanation of the error (e.g., "Spelling error", "Incorrect comma usage").
+        * `revision`: The corrected version of the snippet.
+
+    ## TEXT:
+    {{ input_text }}
+
+- prompt_id_ref: symbol_notation_consistency
+  description: "Ensure notation are used coherently."
+  input_granularity: whole_text
+  prompt: |
+    ## ROLE:
+    You are an expert reviewer of cryptographic research with meticulous attention to mathematical notation and symbol consistency.
+
+    ## TASK:
+    Analyze the provided TEXT to ensure all symbols and notations are used consistently, cross-referencing against the provided SYMBOL_GLOSSARY. You must identify any deviation or inconsistent usage.
+
+    ## INSTRUCTIONS:
+    1.  Review the SYMBOL_GLOSSARY to understand the defined meaning and LaTeX representation of each symbol.
+    2.  Carefully read the provided TEXT, paying close attention to every mathematical symbol and piece of notation.
+    3.  Identify any usage in the TEXT that contradicts the SYMBOL_GLOSSARY. This includes:
+        * Using the wrong symbol for a defined concept.
+        * Using a defined symbol for the wrong concept.
+        * Inconsistent formatting or representation of a symbol.
+    4.  For each identified issue, create a JSON object. The final output should be a single JSON object containing a list named "issues".
+    5.  Each object in the list must contain:
+        * `snippet`: The exact symbol or notation used incorrectly.
+        * `sentence_context`: The full sentence containing the inconsistent snippet.
+        * `issue`: A concise explanation of the inconsistency (e.g., "Symbol 'k' used, but glossary defines 'λ' as the security parameter.", "Notation for encryption function is inconsistent with definition.").
+        * `revision`: The corrected symbol or notation based on the glossary.
+
+    ## SYMBOL_GLOSSARY:
+    \begin{itemize}
+      \item[\$m\$]: The size, in bits, of the primary bit array used in structures like Bloom filters.
+      \item[\$k\$]: The number of independent hash functions used specifically in a Bloom Filter.
+      \item[\$p\$]: The precision parameter for a HyperLogLog (HLL) structure, which determines the number of registers and thus its accuracy.
+      \item[\$d\$]: The depth (number of rows) of a Count-Min Sketch matrix. This corresponds to the number of hash functions it uses.
+      \item[\$w\$]: The width (number of columns) of a Count-Min Sketch matrix.
+      \item[\$h_i(x)\$]: A generic representation for the \$i\$-th hash function applied to an element \$x\$.
+    \end{itemize}
+
+    ## TEXT:
+    {{ input_text }}
+
+- prompt_id_ref: clarity_flow_enhancement
+  description: "Improve phrasing for better readability."
+  input_granularity: paragraph
+  prompt: |
+    ## ROLE:
+    You are an expert academic editor specializing in enhancing the clarity and readability of complex technical writing in the field of cryptography.
+
+    ## TASK:
+    Revise the provided TEXT to improve its clarity, conciseness, and narrative flow without altering the core technical meaning. Your focus is on how the ideas are expressed, not on their correctness.
+
+    ## INSTRUCTIONS:
+    1.  Carefully read the provided TEXT.
+    2.  Identify and flag any sentences or phrases that are:
+        * Awkwardly phrased.
+        * Unnecessarily verbose or wordy.
+        * Hard to parse or syntactically complex.
+        * Ambiguous.
+    3.  For each identified issue, create a JSON object. The final output should be a single JSON object containing a list named "issues".
+    4.  Each object in the list must contain:
+        * `snippet`: The exact phrase or sentence that is poorly written.
+        * `sentence_context`: The full sentence containing the snippet (if the snippet is not the full sentence).
+        * `issue`: A concise explanation of the stylistic problem (e.g., "Awkward phrasing", "Redundant phrase", "Hard to parse due to multiple clauses").
+        * `revision`: A revised version of the sentence that is clearer and more direct.
+
+    ## TEXT:
+    {{ input_text }}
+</file>
+
+<file path="frontend/public/text.txt">
+\section{Night usage}
+\subsection{High level night vs day differences..}
+\begin{figure}
+    \centering
+    \includegraphics[width=0.9\linewidth]{figures2/hour_duration_share.png}
+    \caption{Duration share by hour. }
+    \label{fig:hour_duration_share}
+\end{figure}
+
+Figure \ref{fig:hour_duration_share} shows the circadian rhythm in phone usage. We observe that phone usage peaks in the late evening around 22, and dips in the late night around 4-5. The peak in the middle of the day is lunch time. 
+
+We split the day into two groups:
+\begin{enumerate}
+    \item \textbf{Day}: hours from 6am to 21pm
+    \item \textbf{Night}: hours between 21pm and 6am
+\end{enumerate}
+
+Night usage covers 30\% of total duration, and 23\% of total checks. 
+Night usage and day usage are qualitatively different modes of usage, as seen by user behavior. 
+Specifically, night usage is more immersive and focused. We observe this through two key metrics:
+\begin{enumerate}
+    \item Figure \ref{fig:hour_packages_per_bin} shows how the number of packages used in a given 15-minute bin changes by hour. 
+    During the day, users use a greater number of apps. 
+    \item Figure \ref{fig:hour_checks_per_minute} shows the number of app checks per minute of duration. For every minute a user spends on their phone, they do fewer checks during the night. 
+\end{enumerate}
+
+\begin{figure}
+    \centering
+    \includegraphics[width=0.8\linewidth]{figures2/hour_packages_per_bin.png}
+    \caption{Mean number of package used in a 15-minute time bin by hour. }
+    \label{fig:hour_packages_per_bin}
+\end{figure}
+
+\begin{figure}
+    \centering
+    \includegraphics[width=0.8\linewidth]{figures2/hour_checks_per_minute.png}
+    \caption{Number of checks for every minute of phone usage.}
+    \label{fig:hour_checks_per_minute}
+\end{figure}
+
+\subsection{App mix}
+These differences are related to changes in the app mix. 
+For each app we define a night-screen index, which measures how much an app is night oriented. 
+\subsubsection{Definition}
+How do we measure how much an app is night oriented?
+We assume that usage is a random variable $X$, so $P(X = i)$ is the probability of usage at hour $i$. 
+We then reorder hours linearly. We assume the day starts at 5am, and order hours from then on. 
+Our ordering functions $o$ maps an hour to an interger that represents it place in the order:
+\begin{equation}
+    o(i) = (i -6) \mod 25
+\end{equation}
+So, for example $o(6) = 0$ and $o(5) = -1 \mod 24 = 23$. 
+We then consider the cumulative density function of usage with this ordering of hours. 
+So, $f(x)$ is the probability of usage between 6am and hour $x$. Formally, if $o^{-1}$ is the inverse of $o$, then:
+\begin{equation}
+    f(x) = P(o^{-1}(0) \leq X \leq o^{-1}(x))
+\end{equation}
+The area under the curve of $f(x)$ is a measure of how skewed usage is towards the start point ($\arg \min o(x)$ = 6am). 
+The larger the area, the closer to 6am the bulk of the usage. The complement of this area (the area between the curve and 1) is a measure of how skewed usage is towards the endpoint ($\arg \max o(x)$ = 4am). The larger the area, the greater the usage near the endpoint. We define the night screen index (NSI) as the complement of the area under the curve of the cdf $f$, normalized by the total area of the box (=24). 
+\begin{equation}
+    \text{NSI} = 1 - \frac{1}{24}\sum_{x = 1}^{24}f(x) 
+\end{equation}
+
+
+The NSI varies between 0 and 1, and the larger the NSI, the greater the night usage. 
+The curve in Figure \ref{fig:hour_duration_share} has an NSI of 0.45. This is slightly lower than an NSI of 0.5 which would indicate perfectly uniform usage across the full day, but above an NSI of 0.4 that indicates uniform usage between 8 and midnight. 
+\textbf{Question}: What is the correct benchmark value for the NSI?
+
+IT WORRRDKS
+</file>
+
+<file path="README.md">
+# LLM Editor
+
+A web-based text correction tool that uses LLM prompts to identify and fix issues in text documents. 
+
+## Installation
+
+1. Install docker desktop https://www.docker.com/
+2. Clone the repository
+```
+git clone https://github.com/andreamusso96/llm_editor.git
+```
+3. Enter the repository
+```
+cd llm_editor
+```
+4. Copy the .env.example file into a .env file
+```
+cp .env.example .env
+```
+5. Get a Gemini api key https://aistudio.google.com/api-keys and paste in the `.env` file where it says 
+```
+GOOGLE_API_KEY=YOUR_API_KEY
+```
+All other environment variables you can leave as they are. 
+
+6. Start up the containers using docker compose
+```
+docker compose up --build
+```
+   Wait a couple of seconds for the containers to boot up. 
+7. Paste this URL into your browser http://localhost:5173. You should see a website with "Writing Editor" as a title.
+
+## Usage
+
+1. **Prepare Your Text**: Place your text file in `frontend/public/text.txt`
+2. **Select Prompts**: Choose which correction prompts you want to run from the available options
+3. **Run Corrections**: Click the "Run" button and wait for the processing to complete
+4. **Review Results**: View the identified issues and suggested corrections
+
+## Adding Custom Prompts
+
+You can add you custom prompts (WIP).
+To add new prompts, create YAML files in the `backend/database_setup/prompts/` directory following this structure:
+
+```yaml
+- prompt_id_ref: your_prompt_name
+  description: "Brief description of what this prompt does"
+  input_granularity: paragraph  # or whole_text
+  prompt: |
+    Your prompt text here...
+    Use {{ input_text }} to reference the input text
+```
+
+### Prompt Structure
+
+- **prompt_id_ref**: A unique string identifier for your prompt
+- **description**: A short description explaining what the prompt does
+- **input_granularity**: 
+  - `paragraph`: Runs the prompt on each paragraph separately
+  - `whole_text`: Runs the prompt on the entire text at once
+- **prompt**: Your actual prompt text. Use `{{ input_text }}` to reference the input text
+
+### Expected Output Format
+
+Your prompt must return a JSON response in this format:
+
+```json
+{
+  "issues": [
+    {
+      "snippet": "The exact text with the issue",
+      "sentence_context": "The full sentence containing the issue",
+      "issue": "Description of the problem",
+      "revision": "The corrected version"
+    }
+  ]
+}
+```
+
+### Example Prompt
+
+Here's an example of a grammar correction prompt:
+
+```yaml
+  - prompt_id_ref: copy_editor_corrections
+    description: "Check punctuation, grammar, and spelling errors."
+    input_granularity: paragraph
+    prompt: |
+        ## ROLE:
+        You are an expert copy editor for scientific writing, tasked with reviewing a PhD thesis in cryptography.
+
+        ## TASK:
+        Analyze the provided TEXT to identify and correct all objective errors. Your goal is to ensure the text is grammatically perfect and free of spelling and punctuation mistakes.
+
+        ## INSTRUCTIONS:
+        1.  Carefully read the provided TEXT.
+        2.  Identify any sections, sentences, or phrases that exhibit the following issues:
+            * Grammar errors (e.g., subject-verb agreement, tense, word order).
+            * Spelling errors.
+            * Punctuation errors.
+        3.  For each identified issue, create a JSON object. The final output should be a single JSON object containing a list named "issues".
+        4.  Each object in the list must contain the following keys:
+            * `snippet`: The exact part of the TEXT with the issue. Keep it as short as possible.
+            * `sentence_context`: The full sentence containing the snippet.
+            * `issue`: A concise explanation of the error (e.g., "Spelling error", "Incorrect comma usage").
+            * `revision`: The corrected version of the snippet.
+
+        ## TEXT:
+        {{ input_text }}
+```
+
+## Project Structure
+
+```
+llm_editor/
+├── backend/
+│   ├── database_setup/prompts/  # Custom prompts go here
+│   ├── src/
+│   │   ├── api.py              # FastAPI endpoints
+│   │   ├── services/           # Business logic
+│   │   └── schemas/            # Pydantic models
+│   └── requirements.txt
+├── frontend/
+│   ├── public/text.txt         # Your text file goes here
+│   ├── src/
+│   │   ├── components/         # React components
+│   │   └── services/           # API calls
+│   └── package.json
+└── README.md
+```
+</file>
+
+</files>

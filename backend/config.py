@@ -18,3 +18,5 @@ SQLALCHEMY_DATABASE_URL = f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HO
 LLM_MODEL_NAME = "gemini-2.5-pro" # This is likely the best model for this task.
 # LLM_MODEL_NAME="gemini-2.5-flash-preview-05-20"
 # LLM_MODEL_NAME="gemini-1.5-flash-8b" # This is the cheapest model.
+RATE_LIMIT_RPM = 50
+CONCURRENT_LLM_CALLS = 10
