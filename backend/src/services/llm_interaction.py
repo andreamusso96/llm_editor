@@ -56,7 +56,7 @@ class LLMInteraction:
                     logger.warning(f"Retrying LLM call after {self.retry_delay} seconds")
                     sleep_time = self.retry_delay * (2 ** current_retries)
                     sleep_time += random.uniform(0, 1)
-                    sleep_time = max(sleep_time, 60) # Cap the sleep time at 60 seconds.
+                    sleep_time = min(sleep_time, 60) # Cap the sleep time at 60 seconds.
                     await asyncio.sleep(sleep_time)
                 else:
                     logger.error(f"Failed to get raw output from LLM after {self.max_retries} retries")
